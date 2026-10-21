@@ -283,12 +283,12 @@ ReadMD/
 ├─ docs/
 │  ├─ assets/            README logo
 │  └─ decisions/         ADR 决策记录
+├─ CHANGELOG.md          变更记录
+├─ CONTRIBUTING.md       贡献指南
 ├─ build/
 │  └─ icon.ico           Windows 应用图标
 ├─ package.json
 ├─ package-lock.json
-├─ CHANGELOG.md
-├─ CONTRIBUTING.md
 ├─ LICENSE
 └─ README.md
 ```
@@ -400,8 +400,6 @@ npm run dist:dir     # 只生成未打包目录，便于调试
 ## 参与贡献
 
 欢迎提交 Issue 和 Pull Request。开始之前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-简单流程：
 
 1. Fork 仓库并创建分支：`git checkout -b feat/your-feature`
 2. 安装依赖：`npm install`
