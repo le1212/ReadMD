@@ -116,11 +116,19 @@
 
 ## 界面预览
 
+| 欢迎页 / 空状态 | 浅色模式 |
+| :---: | :---: |
+| ![欢迎页](docs/assets/screenshot-welcome.png) | ![浅色模式](docs/assets/screenshot-light.png) |
+
+| 深色模式 | 全屏模式（正文自动居中） |
+| :---: | :---: |
+| ![深色模式](docs/assets/screenshot-dark.png) | ![全屏模式](docs/assets/screenshot-fullscreen.png) |
+
 界面采用卡片式布局：浅灰画布、悬浮圆角面板、统一 34px 控件高度、16/18px 图标、柔和阴影。颜色、圆角、间距均集中在 CSS 变量中，方便自定义主题。
 
 全屏或宽窗口下，正文列会自动居中，不会偏向一侧；拖动正文右边缘的细线可调整正文宽度，双击恢复默认 920px。左侧文件树右边缘、右侧大纲面板左边缘也各有一个拖拽手柄，分别用于调整侧边栏和大纲宽度。
 
-> 界面截图由 `npm run smoke` 自动生成到 `docs/screenshots/`（测试产物，已加入 `.gitignore`，不入库）。
+> 截图分两层管理：README 使用的定稿截图作为文档资源保存在 `docs/assets/` 并入库；`npm run smoke` 的原始输出写入 `docs/screenshots/`（测试产物，已忽略，不入库）。UI 有明显变化时，挑新的截图覆盖 `docs/assets/` 里的对应文件即可。
 
 ---
 
