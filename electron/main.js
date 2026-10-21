@@ -444,22 +444,43 @@ async function openPathFromSystem(filePath) {
   }
 }
 
+// 冒烟测试夹具在运行时生成，仓库中不保存任何测试数据。
+const SMOKE_IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nXQAAAAASUVORK5CYII=';
+
+const SMOKE_SAMPLE_MARKDOWN = [
+  '# 欢迎使用 ReadMD',
+  '',
+  '![ReadMD](assets/smoke-image.png)',
+  '',
+  '## 功能列表',
+  '',
+  '- 本地文件优先',
+  '- 即时渲染编辑',
+  '- 自动保存',
+  '',
+  '## 快捷键',
+  '',
+  '| 快捷键 | 功能 |',
+  '| --- | --- |',
+  '| Ctrl+S | 保存 |',
+  '',
+  '```js',
+  "console.log('hello');",
+  '```',
+  '',
+].join('\n');
+
 function runSmokeTest() {
-  const sourceSampleDir = app.isPackaged
-    ? path.join(process.resourcesPath, 'sample')
-    : path.join(__dirname, '..', 'sample');
-  const sampleDir = app.isPackaged
-    ? path.join(os.tmpdir(), `readmd-smoke-sample-${process.pid}`)
-    : sourceSampleDir;
-  if (app.isPackaged) {
-    fs.rmSync(sampleDir, { recursive: true, force: true });
-    fs.cpSync(sourceSampleDir, sampleDir, { recursive: true });
-  }
+  const sampleDir = path.join(os.tmpdir(), `readmd-smoke-sample-${process.pid}`);
   const sampleFile = path.join(sampleDir, '欢迎使用 ReadMD.md');
+  fs.rmSync(sampleDir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(sampleDir, 'assets'), { recursive: true });
+  fs.writeFileSync(sampleFile, SMOKE_SAMPLE_MARKDOWN, 'utf8');
+  fs.writeFileSync(path.join(sampleDir, 'assets', 'smoke-image.png'), Buffer.from(SMOKE_IMAGE_BASE64, 'base64'));
+
   const screenshotDir = app.isPackaged
     ? path.join(os.tmpdir(), 'readmd-smoke-shots')
     : path.join(__dirname, '..', 'docs', 'screenshots');
-  const originalContent = fs.readFileSync(sampleFile, 'utf8');
   const failures = [];
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -680,16 +701,9 @@ function runSmokeTest() {
       console.error('[ReadMD] 冒烟测试异常', error);
     } finally {
       try {
-        fs.writeFileSync(sampleFile, originalContent, 'utf8');
-      } catch (error) {
-        console.error('[ReadMD] 还原示例文件失败', error);
-      }
-      if (app.isPackaged) {
-        try {
-          fs.rmSync(sampleDir, { recursive: true, force: true });
-        } catch {
-          // 忽略清理失败
-        }
+        fs.rmSync(sampleDir, { recursive: true, force: true });
+      } catch {
+        // 忽略清理失败
       }
       console.log(`[smoke] 截图目录: ${screenshotDir}`);
       console.log(failures.length ? `[smoke] FAIL: ${failures.join('；')}` : '[smoke] PASS');

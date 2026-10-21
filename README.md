@@ -116,21 +116,11 @@
 
 ## 界面预览
 
-| 欢迎页 / 空状态 | 浅色模式 |
-| :---: | :---: |
-| ![欢迎页](docs/screenshots/smoke-welcome.png) | ![浅色模式](docs/screenshots/smoke-light.png) |
-
-| 深色模式 |
-| :---: |
-| ![深色模式](docs/screenshots/smoke-dark.png) |
-
-| 全屏模式（正文自动居中，可拖拽调宽） |
-| :---: |
-| ![全屏模式](docs/screenshots/smoke-fullscreen.png) |
-
 界面采用卡片式布局：浅灰画布、悬浮圆角面板、统一 34px 控件高度、16/18px 图标、柔和阴影。颜色、圆角、间距均集中在 CSS 变量中，方便自定义主题。
 
 全屏或宽窗口下，正文列会自动居中，不会偏向一侧；拖动正文右边缘的细线可调整正文宽度，双击恢复默认 920px。左侧文件树右边缘、右侧大纲面板左边缘也各有一个拖拽手柄，分别用于调整侧边栏和大纲宽度。
+
+> 界面截图由 `npm run smoke` 自动生成到 `docs/screenshots/`（测试产物，已加入 `.gitignore`，不入库）。
 
 ---
 
@@ -192,7 +182,6 @@ npm run dist:dir
 6. **切换主题**：点击右上角月亮/太阳图标，或按 `Ctrl+Shift+D`。
 7. **调整宽度**：拖动正文右边缘的细线改变正文列宽；拖动左侧文件树右边缘的细线改变侧边栏宽度；拖动右侧大纲面板左边缘的细线改变大纲宽度。双击各手柄可恢复默认宽度。
 8. **导出**：菜单“文件 → 导出 HTML / 导出 PDF”。
-9. **查看示例**：打开仓库里的 `sample` 文件夹，里面有完整的示例文档。
 
 ### 文件行为说明
 
@@ -283,11 +272,9 @@ ReadMD/
 │  └─ vendor/vditor/     npm install 时生成的 Vditor 离线资源（不提交）
 ├─ scripts/
 │  └─ prepare-vditor.js  postinstall：复制 Vditor dist
-├─ sample/               示例文档与配图
 ├─ docs/
 │  ├─ assets/            README logo
-│  ├─ decisions/         ADR 决策记录
-│  └─ screenshots/       冒烟测试截图
+│  └─ decisions/         ADR 决策记录
 ├─ build/
 │  └─ icon.ico           Windows 应用图标
 ├─ package.json
@@ -316,7 +303,7 @@ npm run dist:dir     # 只生成未打包目录，便于调试
 
 ### 冒烟测试覆盖
 
-`npm run smoke` 会实际启动 Electron，打开示例文档并检查：
+`npm run smoke` 会实际启动 Electron，在临时目录生成测试夹具并检查：
 
 - 文件树、标签页、编辑器、大纲、工具栏是否生成
 - 相对路径图片是否加载成功
@@ -332,8 +319,8 @@ npm run dist:dir     # 只生成未打包目录，便于调试
 
 | 检查项 | 结果 |
 | --- | --- |
-| 文件树 / 标签 / 大纲 / 工具栏 | 2 / 1 / 9 / 18 |
-| 相对路径图片 | 640px，加载成功 |
+| 文件树 / 标签 / 大纲 / 工具栏 | 2 / 1 / 4 / 18 |
+| 相对路径图片 | 1×1 PNG，加载成功 |
 | 查找 | 12 处匹配 |
 | HTML 导出 | 54,941 字符 |
 | PDF 导出 | 171,495 字节，文件头 `%PDF-` |
@@ -344,7 +331,7 @@ npm run dist:dir     # 只生成未打包目录，便于调试
 | 保存流程 | 未保存 → 磁盘更新 → 已保存 |
 | 生产依赖审计 | `npm audit --omit=dev`：0 个漏洞 |
 
-打包后的 `dist/ReadMD-0.1.1-portable.exe` 也执行了同一套冒烟测试并通过，说明 ASAR 内的 Vditor 资源、示例文档和 PDF 导出在打包后仍然正常。
+打包后的 `dist/ReadMD-0.1.1-portable.exe` 也执行了同一套冒烟测试并通过，说明 ASAR 内的 Vditor 资源、临时夹具和 PDF 导出在打包后仍然正常。
 
 > 开发打包工具链（electron-builder 等 devDependencies）可能被 npm 报告若干告警，这些依赖不会进入最终运行时；生产依赖审计为 0。
 
@@ -388,7 +375,7 @@ npm run dist:dir     # 只生成未打包目录，便于调试
 - [x] 即时渲染、大纲、查找、深色模式
 - [x] 图片粘贴落盘到 `assets/`
 - [x] HTML / PDF 导出
-- [x] 示例文档与端到端冒烟测试
+- [x] 端到端冒烟测试
 - [ ] 全文件夹搜索与替换
 - [ ] 监听外部文件变化并提示重新加载
 - [ ] 按标签恢复光标位置和滚动位置
