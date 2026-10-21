@@ -33,8 +33,19 @@ const state = {
   findDebounce: null,
   lastFindResult: null,
   smoke: false,
-  vendorCssCache: new Map(),
-  lastTitle: null
+  platform: 'win32',
+  associationStatus: null,
+  lastTitle: null,
+  batchExporting: false,
+  exportSettings: {
+    formal: false,
+    header: false,
+    footer: true,
+    cover: false,
+    toc: false,
+    coverSubtitle: '',
+    coverAuthor: ''
+  }
 };
 
 const els = {
@@ -53,6 +64,7 @@ const els = {
   btnSave: document.getElementById('btn-save'),
   contentResizer: document.getElementById('content-resizer'),
   outlineResizer: document.getElementById('outline-resizer'),
+  backTop: document.getElementById('btn-back-top'),
   findbar: document.getElementById('findbar'),
   findInput: document.getElementById('find-input'),
   findCount: document.getElementById('find-count'),
@@ -151,6 +163,18 @@ async function init() {
     state.recentFolders = Array.isArray(info.state.recentFolders) ? info.state.recentFolders : [];
     state.recentFiles = Array.isArray(info.state.recentFiles) ? info.state.recentFiles : [];
     state.smoke = Boolean(info.smoke);
+    state.platform = info.platform || 'win32';
+
+    const savedExport = info.state.exportSettings || {};
+    state.exportSettings = {
+      formal: Boolean(savedExport.formal),
+      header: Boolean(savedExport.header),
+      footer: savedExport.footer !== false,
+      cover: Boolean(savedExport.cover),
+      toc: Boolean(savedExport.toc),
+      coverSubtitle: String(savedExport.coverSubtitle || ''),
+      coverAuthor: String(savedExport.coverAuthor || '')
+    };
 
     applyTheme(state.theme, false);
     applySidebar(false);
@@ -163,9 +187,13 @@ async function init() {
     updateTitle();
 
     createVditor();
+    initAIBridge();
     if (state.smoke) attachSmokeHooks();
-    api.rendererReady();
+    // 先恢复上次会话，再通知主进程投递“双击打开”的文件，
+    // 避免恢复会话把用户刚双击的文档切走。
     await restoreSession(info.state);
+    api.rendererReady();
+    refreshAssociationEntry();
   } catch (error) {
     toast(`初始化失败：${errorMessage(error)}`, 'error', 8000);
     console.error('[ReadMD] init failed', error);
@@ -268,13 +296,13 @@ function createVditor() {
           clearTimeout(timer);
           state.vditorReady = true;
           observeEditorLayout();
+          bindBackTop();
           setTimeout(() => {
             updateContentResizer();
             updateOutlineResizer();
-            const imageButton = document.querySelector('.vditor-toolbar__item [data-type="upload"]');
-            if (imageButton) {
-              imageButton.title = '插入图片（支持选择、拖拽、粘贴）';
-            }
+            updateBackTopPosition();
+            applyToolbarTitles();
+            observeOutlineTitles();
           }, 200);
           resolve();
         }
@@ -284,6 +312,155 @@ function createVditor() {
       reject(error);
     }
   });
+}
+
+/* ---------------------------- 回到顶部 ---------------------------- */
+
+const BACK_TOP_THRESHOLD = 240;
+let backTopScroller = null;
+
+// Vditor 各模式的滚动容器不同：IR/WYSIWYG 是可编辑的 pre，预览模式是 preview 面板。
+function editorScroller() {
+  const core = state.vditor && state.vditor.vditor;
+  if (!core) return null;
+  if (core.preview && core.preview.element && core.preview.element.style.display === 'block') {
+    return core.preview.element;
+  }
+  const mode = core.currentMode;
+  return (core[mode] && core[mode].element) || null;
+}
+
+function updateBackTopPosition() {
+  if (!els.backTop) return;
+  // 按钮停在大纲左侧，避免遮住大纲和控制柄；大纲隐藏时自动贴回正文右缘。
+  const outline = document.querySelector('.vditor-outline');
+  const outlineWidth = outline && outline.offsetWidth > 0 ? outline.offsetWidth : 0;
+  els.backTop.style.right = `${outlineWidth + 20}px`;
+}
+
+function updateBackTopState() {
+  if (!els.backTop) return;
+  const scroller = editorScroller();
+  const show = Boolean(
+    scroller &&
+    scroller.scrollTop > BACK_TOP_THRESHOLD &&
+    els.editorShell.classList.contains('has-doc')
+  );
+  els.backTop.classList.toggle('is-visible', show);
+  els.backTop.setAttribute('aria-hidden', show ? 'false' : 'true');
+  els.backTop.tabIndex = show ? 0 : -1;
+}
+
+function bindBackTop() {
+  const scroller = editorScroller();
+  if (scroller && scroller !== backTopScroller) {
+    if (backTopScroller) backTopScroller.removeEventListener('scroll', updateBackTopState);
+    backTopScroller = scroller;
+    scroller.addEventListener('scroll', updateBackTopState, { passive: true });
+  }
+  updateBackTopPosition();
+  updateBackTopState();
+}
+
+function scrollEditorToTop() {
+  const scroller = editorScroller();
+  if (!scroller) return;
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  scroller.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
+}
+
+/* ---------------------------- 悬浮提示 ---------------------------- */
+
+// Vditor 的提示是画在按钮上方的伪元素，会被工具栏的 overflow-y: hidden 裁掉，
+// 这里改写成原生 title，原生提示不受裁剪影响。
+function applyToolbarTitles() {
+  document.querySelectorAll('.vditor-toolbar__item > [aria-label]').forEach((item) => {
+    const raw = (item.getAttribute('aria-label') || '').trim();
+    if (!raw) return;
+    // 「粗体 <Ctrl+B>」统一成应用其他按钮的「粗体 (Ctrl+B)」写法
+    const title = raw.replace(/\s*<([^<>]+)>\s*$/, ' ($1)');
+    if (item.title !== title) item.title = title;
+  });
+}
+
+// 大纲条目超长时只显示一行，补 title 让悬浮能看到完整标题。
+function outlineItemTitle(item) {
+  const label = item.querySelector(':scope > span');
+  if (!label) return (item.textContent || '').replace(/\s+/g, ' ').trim();
+  // KaTeX 会同时输出一份 MathML 和一份可见公式，去掉前者避免提示文字重复
+  const clone = label.cloneNode(true);
+  clone.querySelectorAll('.katex-mathml').forEach((node) => node.remove());
+  return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function applyOutlineTitles() {
+  document.querySelectorAll('.vditor-outline span[data-target-id]').forEach((item) => {
+    const title = outlineItemTitle(item);
+    if (title && item.title !== title) item.title = title;
+  });
+}
+
+let outlineTitleObserver = null;
+let outlineTitleTarget = null;
+let outlineContentObserver = null;
+let outlineContentTarget = null;
+let outlineTitleFrame = 0;
+let outlineRetryTimer = null;
+let outlineRetryCount = 0;
+let outlineTitleInterval = null;
+
+function scheduleOutlineTitles(attempt = 0) {
+  if (outlineTitleFrame) return;
+  outlineTitleFrame = requestAnimationFrame(() => {
+    outlineTitleFrame = 0;
+    applyOutlineTitles();
+
+    // Vditor 的大纲可能比正文晚一拍更新；条目为空或缺少 title 时继续补。
+    const items = Array.from(document.querySelectorAll('.vditor-outline span[data-target-id]'));
+    if (attempt < 10 && (items.length === 0 || items.some((item) => !item.title))) {
+      setTimeout(() => scheduleOutlineTitles(attempt + 1), 200);
+    }
+  });
+}
+
+// Vditor 每次输入都会重建大纲的 HTML，甚至可能替换大纲容器本身。
+// 同时观察编辑器根节点，确保大纲晚出现或晚更新时 title 也能跟上。
+function observeOutlineTitles() {
+  // 兜底轮询：Vditor 重建大纲的时机不完全可预测，观察器偶发漏事件时也能补上。
+  if (!outlineTitleInterval) {
+    outlineTitleInterval = setInterval(() => {
+      if (state.vditor) applyOutlineTitles();
+    }, 600);
+  }
+
+  const outline = document.querySelector('.vditor-outline');
+  if (outline && outline !== outlineTitleTarget) {
+    outlineTitleObserver?.disconnect();
+    outlineTitleTarget = outline;
+    outlineTitleObserver = new MutationObserver(() => scheduleOutlineTitles());
+    outlineTitleObserver.observe(outline, { childList: true, subtree: true, characterData: true });
+    outlineRetryCount = 0;
+  } else if (!outline && !outlineRetryTimer && outlineRetryCount < 20) {
+    // after() 回调可能比大纲 DOM 更早执行；短间隔重试，直到大纲出现。
+    outlineRetryCount += 1;
+    outlineRetryTimer = setTimeout(() => {
+      outlineRetryTimer = null;
+      observeOutlineTitles();
+    }, 200);
+  }
+
+  const editor = document.querySelector('.vditor');
+  if (editor && editor !== outlineContentTarget) {
+    outlineContentObserver?.disconnect();
+    outlineContentTarget = editor;
+    outlineContentObserver = new MutationObserver(() => {
+      observeOutlineTitles();
+      scheduleOutlineTitles();
+    });
+    outlineContentObserver.observe(editor, { childList: true, subtree: true });
+  }
+
+  scheduleOutlineTitles();
 }
 
 async function activateTab(ref, options = {}) {
@@ -305,6 +482,8 @@ async function activateTab(ref, options = {}) {
   await state.vditorReadyPromise;
 
   const wasDirty = tab.dirty;
+  tab.loadingBaseline = true;
+  tab.userMutation = false;
   state.loadingDoc = true;
   const token = ++state.docLoadToken;
 
@@ -320,7 +499,8 @@ async function activateTab(ref, options = {}) {
       state.loadingDoc = false;
       // Vditor 会把 Markdown 规范化（空行、列表符号等）。刚打开且没有未保存修改时，
       // 把规范化结果当作新的基线，避免“只切换标签页就触发自动保存”。
-      if (!wasDirty) {
+      // 如果这段时间里用户已经编辑（例如插入图片），不能再改基线，否则会漏保存。
+      if (!wasDirty && tab.loadingBaseline && !tab.userMutation) {
         try {
           const normalized = state.vditor.getValue();
           if (normalized !== tab.content) {
@@ -335,11 +515,15 @@ async function activateTab(ref, options = {}) {
           // 保留原内容
         }
       }
+      tab.loadingBaseline = false;
+      tab.userMutation = false;
       updateContentResizer();
+      updateBackTopState();
     }, 80);
   }
 
   els.editorShell.classList.add('has-doc');
+  bindBackTop();
   renderTabs();
   updateActiveTree();
   updateStatus();
@@ -405,6 +589,8 @@ function handleEditorInput(value) {
   if (!tab) return;
   const content = typeof value === 'string' ? value : state.vditor.getValue();
   if (content === tab.content) return;
+  tab.loadingBaseline = false;
+  tab.userMutation = true;
   tab.content = content;
   const dirty = content !== tab.savedContent;
   if (dirty !== tab.dirty) {
@@ -697,6 +883,7 @@ function showWelcome() {
   els.editorShell.classList.remove('has-doc');
   if (els.contentResizer) els.contentResizer.classList.add('hidden');
   if (els.outlineResizer) els.outlineResizer.classList.add('hidden');
+  updateBackTopState();
   renderRecent();
   updateStatus();
   updateSaveButton();
@@ -1347,6 +1534,7 @@ function scheduleContentResizer() {
   contentResizerFrame = requestAnimationFrame(() => {
     updateContentResizer();
     updateOutlineResizer();
+    updateBackTopPosition();
   });
 }
 
@@ -1403,7 +1591,7 @@ function updateContentResizer() {
   const contentRight = irRect.width / 2 + effectiveWidth / 2;
   const left = irRect.left - shellRect.left + contentRight;
 
-  handle.style.left = `${Math.max(0, left - 5)}px`;
+  handle.style.left = `${Math.max(0, left - 7)}px`;
   handle.style.top = `${irRect.top - shellRect.top}px`;
   handle.style.height = `${irRect.height}px`;
   handle.classList.remove('hidden');
@@ -1580,16 +1768,194 @@ function onFindResult(result) {
 
 /* ------------------------------ 导出 ------------------------------ */
 
-async function buildExportHtml(tab) {
-  const contentHtml = state.vditor.getHTML();
-  const container = document.createElement('div');
-  container.innerHTML = contentHtml;
+/* ------------------------------ AI 助手桥接 ------------------------------ */
+
+function aiGetDocument() {
+  try {
+    return state.vditor ? state.vditor.getValue() : '';
+  } catch {
+    return '';
+  }
+}
+
+function aiGetSelection() {
+  try {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return '';
+    const text = selection.toString().trim();
+    if (!text) return '';
+    const anchor = selection.anchorNode;
+    const element = anchor && anchor.nodeType === 3 ? anchor.parentElement : anchor;
+    if (element && els.vditor.contains(element)) return text.slice(0, 8000);
+  } catch {
+    // 忽略
+  }
+  return '';
+}
+
+function aiGetContext() {
+  const tab = activeTab();
+  return {
+    document: aiGetDocument(),
+    selection: aiGetSelection(),
+    fileName: tab ? tab.name : '',
+    filePath: tab && tab.path ? tab.path : null,
+    rootPath: state.root || null
+  };
+}
+
+function applyAIDocument(content) {
+  const tab = activeTab();
+  if (!tab || !state.vditor) return null;
+
+  const before = state.vditor.getValue();
+  const next = String(content);
+  state.loadingDoc = true;
+  tab.loadingBaseline = false;
+  tab.userMutation = true;
+  state.docLoadToken += 1;
+
+  try {
+    state.vditor.setValue(next, true);
+  } finally {
+    state.loadingDoc = false;
+  }
+
+  tab.content = next;
+  tab.dirty = next !== tab.savedContent;
+  renderTabs();
+  updateSaveButton();
+  updateStatus();
+  updateTitle();
+  api.setDirty(anyDirty());
+  if (tab.path) scheduleAutoSave(tab);
+  return before;
+}
+
+async function renderAIMarkdown(text) {
+  if (window.Vditor && typeof window.Vditor.md2html === 'function') {
+    try {
+      const html = await window.Vditor.md2html(String(text || ''), { cdn: CDN });
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      container.querySelectorAll('script, iframe, object, embed, link, meta, style').forEach((node) => node.remove());
+      container.querySelectorAll('*').forEach((element) => {
+        for (const attribute of Array.from(element.attributes)) {
+          if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name);
+        }
+      });
+      return container.innerHTML;
+    } catch {
+      // 退回纯文本
+    }
+  }
+  return escapeHtmlText(text).replace(/\n/g, '<br>');
+}
+
+function initAIBridge() {
+  if (!window.readmdAI || typeof window.readmdAI.init !== 'function') {
+    window.addEventListener('load', initAIBridge, { once: true });
+    return;
+  }
+  window.readmdAI.init({
+    getDocument: aiGetDocument,
+    getSelection: aiGetSelection,
+    getContext: aiGetContext,
+    applyDocument: applyAIDocument,
+    renderMarkdown: renderAIMarkdown,
+    toast,
+    openFile: (filePath) => openFile(filePath, { silent: true }),
+    refreshTree: () => renderTree()
+  });
+}
+
+function escapeHtmlText(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function ensureKatex() {
+  if (window.katex && typeof window.katex.renderToString === 'function') return window.katex;
+
+  // Vditor 会在第一次遇到公式时异步加载 KaTeX；导出前给它一点时间。
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 1500) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (window.katex && typeof window.katex.renderToString === 'function') {
+      return window.katex;
+    }
+  }
+
+  await new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = `${CDN}/dist/js/katex/katex.min.js`;
+    script.onload = resolve;
+    script.onerror = resolve;
+    document.head.appendChild(script);
+  });
+
+  return window.katex && typeof window.katex.renderToString === 'function' ? window.katex : null;
+}
+
+/**
+ * Vditor 的公式节点只带 data-math 和 KaTeX 的 HTML，没有 MathML。
+ * Word 需要 MathML 才能转成原生公式，所以导出前用 KaTeX 重新渲染成
+ * “HTML + MathML”：PDF 用 HTML 显示，Word 用 MathML 转公式。
+ */
+async function upgradeMathForExport(container) {
+  const elements = Array.from(container.querySelectorAll('[data-math], .language-math'));
+  if (!elements.length) return;
+
+  const katex = await ensureKatex();
+  for (const element of elements) {
+    const latex = element.getAttribute('data-math') || element.textContent || '';
+    if (!latex.trim()) continue;
+
+    if (katex) {
+      try {
+        element.innerHTML = katex.renderToString(latex, {
+          displayMode: element.tagName === 'DIV',
+          output: 'htmlAndMathml',
+          throwOnError: false,
+          strict: 'ignore'
+        });
+        continue;
+      } catch {
+        // 退回下面的纯文本公式
+      }
+    }
+
+    element.innerHTML = `<math xmlns="http://www.w3.org/1998/Math/MathML"><mtext>${escapeHtmlText(latex)}</mtext></math>`;
+  }
+}
+
+function exportTitleFromHtml(html, fallback) {
+  try {
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    const heading = container.querySelector('h1');
+    if (heading) {
+      heading.querySelectorAll('.katex-mathml').forEach((node) => node.remove());
+      const text = (heading.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text) return text.slice(0, 200);
+    }
+  } catch {
+    // 使用文件名兜底
+  }
+  return fallback;
+}
+
+function resolveExportLinks(container, dirUrl) {
+  if (!dirUrl) return;
 
   container.querySelectorAll('img[src]').forEach((img) => {
     const src = img.getAttribute('src');
     if (!src || /^(https?:|data:|file:|blob:)/i.test(src)) return;
     try {
-      img.setAttribute('src', new URL(src, tab.dirUrl).href);
+      img.setAttribute('src', new URL(src, dirUrl).href);
     } catch {
       // 保留原值
     }
@@ -1599,50 +1965,38 @@ async function buildExportHtml(tab) {
     const href = anchor.getAttribute('href');
     if (!href || /^(https?:|mailto:|#|file:)/i.test(href)) return;
     try {
-      anchor.setAttribute('href', new URL(href, tab.dirUrl).href);
+      anchor.setAttribute('href', new URL(href, dirUrl).href);
     } catch {
       // 保留原值
     }
   });
-
-  let vendorCss = state.vendorCssCache.get('light');
-  if (!vendorCss) {
-    vendorCss = await api.vendorCss('light');
-    state.vendorCssCache.set('light', vendorCss);
-  }
-
-  const title = escapeHtml(tab.name.replace(/\.(md|markdown|mdown|mkd|txt|text)$/i, ''));
-  const extraCss = `
-    @page { size: A4; margin: 16mm; }
-    html, body { background: #ffffff; }
-    body { margin: 0; }
-    body.vditor-reset { max-width: 860px; margin: 0 auto; padding: 32px 24px 64px; color: #1f2328; }
-    body.vditor-reset img { max-width: 100%; height: auto; }
-    body.vditor-reset pre { white-space: pre-wrap; }
-    @media print {
-      body.vditor-reset { max-width: none; padding: 0; }
-    }
-  `;
-
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>${title}</title>
-<style>${vendorCss}\n${extraCss}</style>
-</head>
-<body class="vditor-reset">
-${container.innerHTML}
-</body>
-</html>`;
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+async function buildExportPayloadFromHtml({ html, title, dirUrl, baseDir, settings }) {
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  await upgradeMathForExport(container);
+  resolveExportLinks(container, dirUrl);
+
+  return {
+    title,
+    html: container.innerHTML,
+    baseDir,
+    settings: settings ? { ...state.exportSettings, ...settings } : { ...state.exportSettings }
+  };
+}
+
+async function buildExportPayload(tab, overrideSettings) {
+  const contentHtml = state.vditor.getHTML();
+  const fallbackTitle = tab.name.replace(/\.(md|markdown|mdown|mkd|txt|text)$/i, '');
+  return buildExportPayloadFromHtml({
+    html: contentHtml,
+    title: exportTitleFromHtml(contentHtml, fallbackTitle),
+    dirUrl: tab.dirUrl,
+    baseDir: tab.path ? dirName(tab.path) : null,
+    settings: overrideSettings
+  });
 }
 
 async function exportActive(kind) {
@@ -1653,18 +2007,491 @@ async function exportActive(kind) {
   }
 
   syncActiveContent();
+  const payload = await buildExportPayload(tab);
+  if (!payload.html.trim()) {
+    toast('当前文档没有可导出的内容');
+    return;
+  }
+
+  const stem = (payload.title || '未命名文档').slice(0, 80);
+  const labels = { docx: 'Word 文档', pdf: 'PDF', html: 'HTML' };
   try {
-    toast(kind === 'pdf' ? '正在生成 PDF…' : '正在导出 HTML…');
-    const html = await buildExportHtml(tab);
-    const stem = tab.name.replace(/\.(md|markdown|mdown|mkd|txt|text)$/i, '');
-    const target = kind === 'pdf'
-      ? await api.exportPdf(html, `${stem}.pdf`, tab.path)
-      : await api.exportHtml(html, `${stem}.html`, tab.path);
-    if (target) {
-      toast(`已导出：${target}`, 'ok', 4500);
+    toast(`正在生成 ${labels[kind] || '文档'}…`);
+    let result;
+    if (kind === 'docx') {
+      result = await api.exportDocx(payload, `${stem}.docx`, tab.path);
+    } else if (kind === 'pdf') {
+      result = await api.exportPdf(payload, `${stem}.pdf`, tab.path);
+    } else {
+      result = await api.exportHtml(payload, `${stem}.html`, tab.path);
+    }
+
+    if (!result) return;
+    const warningCount = Array.isArray(result.warnings) ? result.warnings.length : 0;
+    if (warningCount) {
+      console.warn('[ReadMD] 导出警告', result.warnings);
+      toast(`已导出：${result.path}（${warningCount} 处内容未完整转换）`, 'ok', 7000);
+    } else {
+      toast(`已导出：${result.path}`, 'ok', 4500);
     }
   } catch (error) {
     toast(`导出失败：${errorMessage(error)}`, 'error', 6000);
+  }
+}
+
+function showExportMenu(anchor) {
+  const rect = anchor.getBoundingClientRect();
+  showContextMenu(rect.left, rect.bottom + 6, [
+    { label: '导出 Word 文档', hint: '.docx', action: () => exportActive('docx') },
+    { label: '导出 PDF 文档', hint: '.pdf', action: () => exportActive('pdf') },
+    { label: '导出网页', hint: '.html', action: () => exportActive('html') },
+    { sep: true },
+    { label: '导出设置…', action: openExportSettings },
+    { label: '批量导出当前文件夹…', action: batchExportFolder }
+  ]);
+}
+
+function exportSettingsSummary() {
+  const parts = [state.exportSettings.formal ? '正式排版（首行缩进）' : '通用排版'];
+  parts.push(state.exportSettings.header ? '有页眉' : '无页眉');
+  parts.push(state.exportSettings.footer ? '有页码' : '无页码');
+  if (state.exportSettings.cover) parts.push('有封面');
+  if (state.exportSettings.toc) parts.push('有目录');
+  return parts.join(' · ');
+}
+
+function openExportSettings() {
+  const root = els.modalRoot;
+  root.innerHTML = '';
+  root.classList.remove('hidden');
+
+  const modal = document.createElement('div');
+  modal.className = 'modal wide';
+  modal.innerHTML = `
+    <h2>导出设置</h2>
+    <p>设置会应用到 Word、PDF 和 HTML，并记住你的选择。</p>
+    <div class="modal-form">
+      <div class="form-block">
+        <div class="form-label">排版风格</div>
+        <div class="segmented" data-role="style">
+          <button type="button" data-style="general">通用文档</button>
+          <button type="button" data-style="formal">正式文档</button>
+        </div>
+        <div class="form-hint" data-role="style-hint"></div>
+      </div>
+      <label class="form-row">
+        <span class="form-copy"><span class="form-label">页眉</span><span class="form-hint">在每页顶部显示文档标题</span></span>
+        <span class="switch"><input type="checkbox" data-setting="header"><span></span></span>
+      </label>
+      <label class="form-row">
+        <span class="form-copy"><span class="form-label">页脚</span><span class="form-hint">在每页底部显示“第 X 页 / 共 Y 页”</span></span>
+        <span class="switch"><input type="checkbox" data-setting="footer"><span></span></span>
+      </label>
+      <label class="form-row">
+        <span class="form-copy"><span class="form-label">封面</span><span class="form-hint">生成独立封面页，标题使用文档一级标题</span></span>
+        <span class="switch"><input type="checkbox" data-setting="cover"><span></span></span>
+      </label>
+      <div class="form-grid" data-role="cover-fields">
+        <div class="form-field"><label for="export-cover-subtitle">封面副标题（可选）</label><input id="export-cover-subtitle" type="text" data-cover="subtitle" maxlength="120" placeholder="例如：2026 年第三季度"></div>
+        <div class="form-field"><label for="export-cover-author">封面署名（可选）</label><input id="export-cover-author" type="text" data-cover="author" maxlength="80" placeholder="例如：张三 / 产品部"></div>
+      </div>
+      <label class="form-row">
+        <span class="form-copy"><span class="form-label">目录</span><span class="form-hint">Word 目录带页码并由 Word 更新；PDF 目录可点击跳转，不含页码</span></span>
+        <span class="switch"><input type="checkbox" data-setting="toc"><span></span></span>
+      </label>
+      <div class="form-hint form-note">提示：启用封面时，PDF 的封面页也会显示页眉/页脚；Word 会自动跳过封面页。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-action="cancel">取消</button>
+      <button class="btn primary" type="button" data-action="save">保存设置</button>
+    </div>`;
+  root.appendChild(modal);
+
+  const styleButtons = Array.from(modal.querySelectorAll('[data-style]'));
+  const styleHint = modal.querySelector('[data-role="style-hint"]');
+  const headerInput = modal.querySelector('[data-setting="header"]');
+  const footerInput = modal.querySelector('[data-setting="footer"]');
+  const coverInput = modal.querySelector('[data-setting="cover"]');
+  const tocInput = modal.querySelector('[data-setting="toc"]');
+  const coverFields = modal.querySelector('[data-role="cover-fields"]');
+  const subtitleInput = modal.querySelector('[data-cover="subtitle"]');
+  const authorInput = modal.querySelector('[data-cover="author"]');
+
+  let formal = Boolean(state.exportSettings.formal);
+
+  const updateStyle = () => {
+    styleButtons.forEach((button) => {
+      button.classList.toggle('active', (button.dataset.style === 'formal') === formal);
+    });
+    styleHint.textContent = formal
+      ? '正文首行缩进 2 字符，适合报告、论文和正式材料。'
+      : '不缩进，用段间距区分段落，适合大多数 Markdown 文档。';
+  };
+
+  const updateCoverFields = () => {
+    const disabled = !coverInput.checked;
+    coverFields.classList.toggle('disabled', disabled);
+    subtitleInput.disabled = disabled;
+    authorInput.disabled = disabled;
+  };
+
+  headerInput.checked = Boolean(state.exportSettings.header);
+  footerInput.checked = state.exportSettings.footer !== false;
+  coverInput.checked = Boolean(state.exportSettings.cover);
+  tocInput.checked = Boolean(state.exportSettings.toc);
+  subtitleInput.value = state.exportSettings.coverSubtitle || '';
+  authorInput.value = state.exportSettings.coverAuthor || '';
+  updateStyle();
+  updateCoverFields();
+
+  styleButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      formal = button.dataset.style === 'formal';
+      updateStyle();
+    });
+  });
+  coverInput.addEventListener('change', updateCoverFields);
+
+  const close = () => {
+    root.removeEventListener('keydown', onKey);
+    root.classList.add('hidden');
+    root.innerHTML = '';
+  };
+
+  const onKey = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  };
+
+  const save = () => {
+    state.exportSettings = {
+      formal,
+      header: headerInput.checked,
+      footer: footerInput.checked,
+      cover: coverInput.checked,
+      toc: tocInput.checked,
+      coverSubtitle: subtitleInput.value.trim().slice(0, 120),
+      coverAuthor: authorInput.value.trim().slice(0, 80)
+    };
+    api.saveState({ exportSettings: { ...state.exportSettings } }).catch(() => {});
+    close();
+    toast('导出设置已保存', 'ok');
+  };
+
+  root.addEventListener('keydown', onKey);
+  modal.querySelector('[data-action="cancel"]').addEventListener('click', close);
+  modal.querySelector('[data-action="save"]').addEventListener('click', save);
+  setTimeout(() => styleButtons[formal ? 1 : 0].focus(), 0);
+}
+
+/* ------------------------------ 默认打开方式 ------------------------------ */
+
+async function refreshAssociationEntry() {
+  const button = document.getElementById('welcome-default-app');
+  if (!button) return;
+  if (state.platform !== 'win32') {
+    button.hidden = true;
+    return;
+  }
+
+  try {
+    const status = await api.fileAssociationStatus();
+    state.associationStatus = status;
+    button.hidden = false;
+    button.classList.toggle('is-default', Boolean(status.isDefault));
+    button.textContent = status.isDefault
+      ? 'ReadMD 已是默认 Markdown 打开方式'
+      : '双击 .md 文件时用 ReadMD 打开 →';
+  } catch {
+    button.hidden = true;
+  }
+}
+
+async function openDefaultAppDialog() {
+  if (state.platform !== 'win32') {
+    toast('文件关联设置目前只支持 Windows 版本', 'info', 5000);
+    return;
+  }
+
+  try {
+    const status = await api.fileAssociationStatus();
+    showAssociationModal(status);
+  } catch (error) {
+    toast(`读取文件关联失败：${errorMessage(error)}`, 'error', 5000);
+  }
+}
+
+function showAssociationModal(initialStatus) {
+  const root = els.modalRoot;
+  root.innerHTML = '';
+  root.classList.remove('hidden');
+
+  const modal = document.createElement('div');
+  modal.className = 'modal wide';
+  modal.innerHTML = `
+    <h2>双击 .md 文件时用 ReadMD 打开</h2>
+    <p>Windows 不允许软件自己修改默认程序。点击“去设置”后，系统会弹出“打开方式”窗口：请选择 <strong>ReadMD</strong>，并勾选“始终使用此应用打开 .md 文件”。</p>
+    <div class="assoc-status">
+      <div class="assoc-row"><span>当前默认程序</span><strong data-role="handler">读取中…</strong></div>
+      <div class="assoc-row"><span>ReadMD 注册状态</span><strong data-role="registered">读取中…</strong></div>
+    </div>
+    <p class="form-hint" data-role="hint"></p>
+    <button class="assoc-remove" type="button" data-role="remove" hidden>从“打开方式”列表移除 ReadMD</button>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-action="cancel">关闭</button>
+      <button class="btn" type="button" data-action="settings">打开 Windows 设置</button>
+      <button class="btn primary" type="button" data-action="setup">去设置</button>
+    </div>`;
+  root.appendChild(modal);
+
+  const handlerEl = modal.querySelector('[data-role="handler"]');
+  const registeredEl = modal.querySelector('[data-role="registered"]');
+  const hintEl = modal.querySelector('[data-role="hint"]');
+  const removeButton = modal.querySelector('[data-role="remove"]');
+  const settingsButton = modal.querySelector('[data-action="settings"]');
+  const setupButton = modal.querySelector('[data-action="setup"]');
+  let pollTimer = null;
+  let pollCount = 0;
+  let current = initialStatus;
+
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  const close = () => {
+    stopPolling();
+    root.removeEventListener('keydown', onKey);
+    root.classList.add('hidden');
+    root.innerHTML = '';
+  };
+
+  const onKey = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  };
+
+  const render = (status) => {
+    current = status;
+    handlerEl.textContent = status.isDefault ? 'ReadMD（已是默认）' : (status.handlerLabel || '尚未设置');
+    handlerEl.classList.toggle('ok', Boolean(status.isDefault));
+
+    if (status.registered) {
+      registeredEl.textContent = status.commandMatches ? '已注册' : '已注册（程序位置已变化，将自动更新）';
+    } else {
+      registeredEl.textContent = '未注册';
+    }
+    registeredEl.classList.toggle('ok', Boolean(status.registered));
+
+    removeButton.hidden = !status.registered;
+    if (status.isDefault) {
+      hintEl.textContent = '设置完成。以后双击 .md、.markdown、.mdown、.mkd 文件都会用 ReadMD 打开；.txt 不受影响。';
+      setupButton.textContent = '重新设置';
+    } else {
+      hintEl.textContent = '支持 .md、.markdown、.mdown、.mkd；不会接管 .txt 文件。';
+      setupButton.textContent = '去设置';
+    }
+  };
+
+  const startPolling = () => {
+    stopPolling();
+    pollCount = 0;
+    pollTimer = setInterval(async () => {
+      pollCount += 1;
+      try {
+        const status = await api.fileAssociationStatus();
+        render(status);
+        state.associationStatus = status;
+        if (status.isDefault) {
+          stopPolling();
+          refreshAssociationEntry();
+          toast('已设为默认：以后双击 Markdown 文件会直接用 ReadMD 打开', 'ok', 5000);
+        }
+      } catch {
+        // 读取失败时继续轮询，用户可能正在系统窗口里操作
+      }
+      if (pollCount >= 20) stopPolling();
+    }, 1500);
+  };
+
+  setupButton.addEventListener('click', async () => {
+    setupButton.disabled = true;
+    settingsButton.disabled = true;
+    try {
+      const status = await api.fileAssociationSetup(state.activePath);
+      render(status);
+      toast('请在系统弹出的“打开方式”窗口里选择 ReadMD，并勾选“始终使用”', 'info', 6000);
+      startPolling();
+    } catch (error) {
+      toast(`设置失败：${errorMessage(error)}`, 'error', 6000);
+    } finally {
+      setupButton.disabled = false;
+      settingsButton.disabled = false;
+    }
+  });
+
+  settingsButton.addEventListener('click', async () => {
+    try {
+      await api.fileAssociationOpenSettings();
+      toast('已打开 Windows 的“默认应用”设置，请把 .md 关联到 ReadMD', 'info', 6000);
+      startPolling();
+    } catch (error) {
+      toast(`打开设置失败：${errorMessage(error)}`, 'error', 5000);
+    }
+  });
+
+  removeButton.addEventListener('click', async () => {
+    stopPolling();
+    root.removeEventListener('keydown', onKey);
+    const confirmed = await showChoice(
+      '移除 ReadMD 关联？',
+      '这会把 ReadMD 从“打开方式”候选列表里移除，不会删除任何文档。之后仍可重新设置。',
+      [
+        { label: '取消', value: false },
+        { label: '移除', value: true, danger: true }
+      ],
+      false
+    );
+    if (!confirmed) {
+      showAssociationModal(current);
+      return;
+    }
+
+    try {
+      await api.fileAssociationRemove();
+      toast('已从“打开方式”列表移除 ReadMD', 'ok');
+      refreshAssociationEntry();
+      await openDefaultAppDialog();
+    } catch (error) {
+      toast(`移除失败：${errorMessage(error)}`, 'error', 5000);
+      await openDefaultAppDialog();
+    }
+  });
+
+  render(initialStatus);
+  root.addEventListener('keydown', onKey);
+  modal.querySelector('[data-action="cancel"]').addEventListener('click', close);
+  setTimeout(() => setupButton.focus(), 0);
+}
+
+async function runBatchExport({ outputDir, format, files, truncated = false }) {
+  if (!window.Vditor || typeof window.Vditor.md2html !== 'function') {
+    throw new Error('Markdown 渲染器尚未就绪');
+  }
+
+  const total = files.length;
+  const labels = { docx: 'Word', pdf: 'PDF', html: 'HTML' };
+  const errors = [];
+  let done = 0;
+  let failed = 0;
+
+  state.batchExporting = true;
+  toast(`开始批量导出 ${total} 个文件（${labels[format] || format}）…`, 'info', 5000);
+
+  try {
+    for (const file of files) {
+      els.statusLeft.textContent = `批量导出 ${done + failed + 1}/${total}：${file.relative}`;
+      try {
+        const data = await api.readFile(file.path);
+        const html = await window.Vditor.md2html(data.content, { cdn: CDN });
+        const dirUrl = await api.dirUrl(file.path);
+        const fallbackTitle = file.name.replace(/\.(md|markdown|mdown|mkd|txt|text)$/i, '');
+        const payload = await buildExportPayloadFromHtml({
+          html,
+          title: exportTitleFromHtml(html, fallbackTitle),
+          dirUrl,
+          baseDir: dirName(file.path)
+        });
+        await api.exportBatchItem(format, payload, outputDir, file.relative);
+        done += 1;
+      } catch (error) {
+        failed += 1;
+        errors.push(`${file.relative}：${errorMessage(error)}`);
+        console.error('[ReadMD] 批量导出失败', file.path, error);
+      }
+    }
+  } finally {
+    state.batchExporting = false;
+    updateStatus();
+  }
+
+  return { done, failed, errors, total, truncated };
+}
+
+async function batchExportFolder() {
+  if (state.batchExporting) {
+    toast('已有批量导出任务在进行');
+    return;
+  }
+  if (!state.root) {
+    toast('请先打开一个文件夹');
+    return;
+  }
+
+  const format = await showChoice(
+    '批量导出当前文件夹',
+    `将把“${state.rootName}”里的 Markdown 按当前设置导出。\n\n当前设置：${exportSettingsSummary()}`,
+    [
+      { label: '取消', value: null },
+      { label: 'Word', value: 'docx', primary: true },
+      { label: 'PDF', value: 'pdf' },
+      { label: 'HTML', value: 'html' }
+    ]
+  );
+  if (!format) return;
+
+  let outputDir;
+  try {
+    outputDir = await api.chooseExportFolder();
+  } catch (error) {
+    toast(`选择输出文件夹失败：${errorMessage(error)}`, 'error', 5000);
+    return;
+  }
+  if (!outputDir) return;
+
+  let listing;
+  try {
+    listing = await api.listMarkdownFiles(state.root);
+  } catch (error) {
+    toast(`读取文件夹失败：${errorMessage(error)}`, 'error', 5000);
+    return;
+  }
+  if (!listing.files.length) {
+    toast('这个文件夹里没有可导出的 Markdown');
+    return;
+  }
+
+  if (!window.Vditor || typeof window.Vditor.md2html !== 'function') {
+    toast('Markdown 渲染器尚未就绪，请稍后再试', 'error', 5000);
+    return;
+  }
+
+  let result;
+  try {
+    result = await runBatchExport({
+      outputDir,
+      format,
+      files: listing.files,
+      truncated: listing.truncated
+    });
+  } catch (error) {
+    toast(`批量导出失败：${errorMessage(error)}`, 'error', 5000);
+    return;
+  }
+
+  const summary = `成功 ${result.done} 个${result.failed ? `，失败 ${result.failed} 个` : ''}。\n输出位置：${outputDir}${result.truncated ? `\n\n文件较多，本次只导出了前 ${result.total} 个。` : ''}${result.errors.length ? `\n\n失败示例：\n${result.errors.slice(0, 3).join('\n')}` : ''}`;
+  const choice = await showChoice('批量导出完成', summary, [
+    { label: '打开文件夹', value: 'open' },
+    { label: '好的', value: 'ok', primary: true }
+  ]);
+  if (choice === 'open') {
+    api.reveal(outputDir).catch(() => {});
   }
 }
 
@@ -1704,6 +2531,11 @@ async function handleImageUpload(files) {
   const tab = activeTab();
   if (!tab) return '请先打开一个 Markdown 文件';
   if (!tab.path) return '请先保存当前文件，再插入图片';
+
+  // 图片插入可能发生在“打开文档后的 80ms 基线校准”之前；
+  // 提前标记为用户修改，避免校准逻辑把新内容当成已保存内容。
+  tab.userMutation = true;
+  tab.loadingBaseline = false;
 
   const inserts = [];
   const relativePaths = [];
@@ -1933,6 +2765,15 @@ function bindStaticEvents() {
   onClick('btn-open-folder', openFolderDialog);
   onClick('btn-open-file', openFileDialog);
   onClick('btn-save', () => saveActive());
+
+  const exportButton = document.getElementById('btn-export');
+  if (exportButton) {
+    exportButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      showExportMenu(exportButton);
+    });
+  }
+
   onClick('btn-theme', toggleTheme);
   onClick('btn-sidebar', toggleSidebar);
   onClick('btn-find', openFind);
@@ -1942,6 +2783,13 @@ function bindStaticEvents() {
   onClick('btn-sidebar-open', openFolderDialog);
   onClick('welcome-open-folder', openFolderDialog);
   onClick('welcome-open-file', openFileDialog);
+  onClick('welcome-default-app', openDefaultAppDialog);
+
+  if (els.backTop) {
+    // 按下时阻止默认行为，回顶后焦点和光标留在编辑器里
+    els.backTop.addEventListener('mousedown', (event) => event.preventDefault());
+    els.backTop.addEventListener('click', safe(scrollEditorToTop));
+  }
 
   onClick('find-prev', () => runFind(false, true));
   onClick('find-next', () => runFind(true, true));
@@ -1994,8 +2842,14 @@ function bindStaticEvents() {
       case 'save-as': saveAsActive(); break;
       case 'close-tab': if (state.activePath) closeTab(state.activePath); break;
       case 'refresh-tree': renderTree(); break;
+      case 'export-docx': exportActive('docx'); break;
       case 'export-html': exportActive('html'); break;
       case 'export-pdf': exportActive('pdf'); break;
+      case 'export-settings': openExportSettings(); break;
+      case 'export-batch': batchExportFolder(); break;
+      case 'default-app': openDefaultAppDialog(); break;
+      case 'toggle-ai': window.readmdAI?.toggle(); break;
+      case 'ai-settings': window.readmdAI?.openSettings(); break;
       case 'toggle-sidebar': toggleSidebar(); break;
       case 'toggle-theme': toggleTheme(); break;
       case 'find': openFind(); break;
@@ -2091,6 +2945,50 @@ function attachSmokeHooks() {
       setTimeout(check, 50);
     });
   },
+  async backTopTest() {
+    const filler = Array.from({ length: 60 }, (_, index) => `第 ${index + 1} 段用于验证回到顶部按钮。`).join('\n\n');
+    await this.appendText(`\n\n${filler}`);
+    const scroller = editorScroller();
+    if (!scroller) return { ok: false, reason: 'no-scroller' };
+
+    // 等 Vditor 完成渲染并让正文足够长，避免滚动位置被后续渲染重置。
+    for (let i = 0; i < 20 && scroller.scrollHeight - scroller.clientHeight < 900; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const metrics = () => ({
+      top: Math.round(scroller.scrollTop),
+      height: scroller.scrollHeight,
+      client: scroller.clientHeight,
+      visible: els.backTop.classList.contains('is-visible')
+    });
+    const initial = metrics();
+
+    scroller.scrollTop = 800;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const afterScroll = metrics();
+
+    scroller.scrollTop = 0;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const afterTop = metrics();
+
+    scroller.scrollTop = 800;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const beforeClick = metrics();
+    els.backTop.click();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const afterClick = metrics();
+
+    return {
+      ok: afterScroll.visible && !afterTop.visible && afterClick.top <= 1 && !afterClick.visible,
+      initial,
+      afterScroll,
+      afterTop,
+      beforeClick,
+      afterClick
+    };
+  },
   save() {
     return saveActive({ silent: true });
   },
@@ -2153,9 +3051,49 @@ function attachSmokeHooks() {
     saveSession();
     return true;
   },
-  exportHtmlString() {
+  exportPayload(settings) {
     const tab = activeTab();
-    return tab ? buildExportHtml(tab) : '';
+    return tab ? buildExportPayload(tab, settings) : null;
+  },
+  async exportHtmlString(settings) {
+    const tab = activeTab();
+    return tab ? api.exportHtmlString(await buildExportPayload(tab, settings)) : '';
+  },
+  async md2htmlTest() {
+    if (!window.Vditor || typeof window.Vditor.md2html !== 'function') return '';
+    return window.Vditor.md2html('# 批量导出标题\n\n正文 **加粗**', { cdn: CDN });
+  },
+  async batchExportTest(root, outputDir, format) {
+    const listing = await api.listMarkdownFiles(root);
+    return runBatchExport({
+      outputDir,
+      format,
+      files: listing.files,
+      truncated: listing.truncated
+    });
+  },
+  openExportSettingsTest() {
+    openExportSettings();
+    return Boolean(document.querySelector('.modal.wide'));
+  },
+  async openDefaultAppTest() {
+    await openDefaultAppDialog();
+    return Boolean(document.querySelector('.modal.wide .assoc-status'));
+  },
+  closeModalTest() {
+    const cancel = document.querySelector('.modal [data-action="cancel"]');
+    const before = document.querySelectorAll('.modal').length;
+    if (cancel) cancel.click();
+    else {
+      els.modalRoot.classList.add('hidden');
+      els.modalRoot.innerHTML = '';
+    }
+    return {
+      cancelFound: Boolean(cancel),
+      before,
+      after: document.querySelectorAll('.modal').length,
+      hidden: els.modalRoot.classList.contains('hidden')
+    };
   },
   setContentWidth(width) {
     applyContentWidth(width, false);
@@ -2275,6 +3213,13 @@ function attachSmokeHooks() {
       treeRows: document.querySelectorAll('.tree-row').length,
       outlineItems: outline ? outline.innerText.split(/\r?\n/).filter((line) => line.trim()).length : 0,
       toolbarItems: document.querySelectorAll('.vditor-toolbar__item').length,
+      exportButton: Boolean(document.getElementById('btn-export')),
+      toolbarButtons: document.querySelectorAll('.vditor-toolbar__item > [aria-label]').length,
+      toolbarTitled: document.querySelectorAll('.vditor-toolbar__item > [aria-label][title]').length,
+      outlineSpans: document.querySelectorAll('.vditor-outline span[data-target-id]').length,
+      outlineTitled: document.querySelectorAll('.vditor-outline span[data-target-id][title]').length,
+      toolbarSampleTitle: document.querySelector('.vditor-toolbar [data-type="bold"]')?.title || null,
+      outlineSampleTitle: document.querySelector('.vditor-outline span[data-target-id]')?.title || null,
       imageWidth: image ? image.naturalWidth : 0,
       activeTitle: tab ? tab.name : null,
       dirty: tab ? tab.dirty : null,

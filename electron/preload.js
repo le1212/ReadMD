@@ -30,14 +30,39 @@ contextBridge.exposeInMainWorld('readmd', {
   dirUrl: (targetPath) => ipcRenderer.invoke('path:dir-url', targetPath),
 
   saveImage: (docPath, fileName, bytes) => ipcRenderer.invoke('image:save', docPath, fileName, bytes),
-  vendorCss: (theme) => ipcRenderer.invoke('export:vendor-css', theme),
-  exportHtml: (html, defaultName, currentPath) =>
-    ipcRenderer.invoke('export:html', html, defaultName, currentPath),
-  exportPdf: (html, defaultName, currentPath) =>
-    ipcRenderer.invoke('export:pdf', html, defaultName, currentPath),
-  exportPdfTest: (html, target) => ipcRenderer.invoke('export:pdf-test', html, target),
+  exportHtml: (payload, defaultName, currentPath) =>
+    ipcRenderer.invoke('export:html', payload, defaultName, currentPath),
+  exportPdf: (payload, defaultName, currentPath) =>
+    ipcRenderer.invoke('export:pdf', payload, defaultName, currentPath),
+  exportDocx: (payload, defaultName, currentPath) =>
+    ipcRenderer.invoke('export:docx', payload, defaultName, currentPath),
+  exportHtmlString: (payload) => ipcRenderer.invoke('export:html-string', payload),
+  exportPdfTest: (payload, target) => ipcRenderer.invoke('export:pdf-test', payload, target),
+  exportDocxTest: (payload, target) => ipcRenderer.invoke('export:docx-test', payload, target),
+  chooseExportFolder: () => ipcRenderer.invoke('export:choose-folder'),
+  listMarkdownFiles: (rootDir) => ipcRenderer.invoke('export:list-markdown', rootDir),
+  exportBatchItem: (format, payload, outputDir, relativePath) =>
+    ipcRenderer.invoke('export:batch-item', format, payload, outputDir, relativePath),
+  exportAuthorizeTestFolder: (dir) => ipcRenderer.invoke('export:authorize-test-folder', dir),
+
+  aiListConfigs: () => ipcRenderer.invoke('ai:list-configs'),
+  aiSaveConfig: (config) => ipcRenderer.invoke('ai:save-config', config),
+  aiDeleteConfig: (configId) => ipcRenderer.invoke('ai:delete-config', configId),
+  aiSetActiveConfig: (configId) => ipcRenderer.invoke('ai:set-active-config', configId),
+  aiTestConfig: (config) => ipcRenderer.invoke('ai:test-config', config),
+  aiStartChat: (request) => ipcRenderer.send('ai:chat', request),
+  aiAbortChat: (requestId) => ipcRenderer.send('ai:abort', requestId),
+  aiParseDocument: (name, bytes) => ipcRenderer.invoke('ai:parse-document', name, bytes),
+  aiDiff: (oldText, newText) => ipcRenderer.invoke('ai:diff', oldText, newText),
+  onAIEvent: (callback) => subscribe('ai:event', callback),
 
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+
+  fileAssociationStatus: () => ipcRenderer.invoke('app:file-association-status'),
+  fileAssociationRegister: () => ipcRenderer.invoke('app:file-association-register'),
+  fileAssociationRemove: () => ipcRenderer.invoke('app:file-association-remove'),
+  fileAssociationSetup: (activeFile) => ipcRenderer.invoke('app:file-association-setup', activeFile),
+  fileAssociationOpenSettings: () => ipcRenderer.invoke('app:file-association-open-settings'),
 
   saveState: (patch) => ipcRenderer.invoke('state:save', patch),
   setDirty: (dirty) => ipcRenderer.send('app:set-dirty', Boolean(dirty)),

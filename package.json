@@ -1,6 +1,6 @@
 {
   "name": "readmd",
-  "version": "0.1.1",
+  "version": "0.4.0",
   "description": "ReadMD - 本地 Markdown 阅读与编辑工具",
   "main": "electron/main.js",
   "author": "ReadMD contributors",
@@ -41,9 +41,11 @@
       "package.json",
       "README.md",
       "LICENSE",
+      "docs/assets/logo.png",
       "!**/*.map"
     ],
     "asar": true,
+    "electronDist": "node_modules/electron/dist",
     "win": {
       "target": [
         {
@@ -58,5 +60,18 @@
     "portable": {
       "artifactName": "ReadMD-${version}-portable.exe"
     }
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.85",
+    "@ai-sdk/google": "4.0.102",
+    "@ai-sdk/openai": "4.0.99",
+    "@ai-sdk/openai-compatible": "3.0.75",
+    "ai": "7.0.148",
+    "diff": "9.0.0",
+    "docx": "9.13.0",
+    "jszip": "3.10.1",
+    "node-html-parser": "9.0.5",
+    "unpdf": "1.9.1",
+    "zod": "4.6.7"
   }
 }
