@@ -1,0 +1,68 @@
+{
+  "name": "readmd",
+  "version": "0.1.1",
+  "description": "ReadMD - 本地 Markdown 阅读与编辑工具",
+  "main": "electron/main.js",
+  "author": "ReadMD contributors",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "markdown",
+    "markdown-editor",
+    "electron",
+    "vditor",
+    "desktop",
+    "windows"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/prepare-vditor.js",
+    "start": "electron .",
+    "smoke": "electron . --smoke-test",
+    "dist": "electron-builder --win portable",
+    "dist:dir": "electron-builder --win --dir"
+  },
+  "devDependencies": {
+    "electron": "42.1.0",
+    "electron-builder": "26.15.3",
+    "vditor": "4.0.1"
+  },
+  "build": {
+    "appId": "com.readmd.app",
+    "productName": "ReadMD",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "sample",
+        "to": "sample"
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "ReadMD-${version}-portable.exe"
+    }
+  }
+}

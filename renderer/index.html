@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob: https:; font-src 'self' file: data:; media-src 'self' file: data: blob:; connect-src 'self' file: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReadMD</title>
+  <link rel="stylesheet" href="./vendor/vditor/dist/index.css">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside id="sidebar" class="sidebar">
+      <div class="brand-row">
+        <div class="brand-mark">R</div>
+        <div class="brand-copy">
+          <span class="brand-name">ReadMD</span>
+          <span class="brand-sub">本地 Markdown 工作台</span>
+        </div>
+      </div>
+
+      <button id="btn-open-folder" class="btn primary block">打开文件夹</button>
+
+      <div class="sidebar-folder">
+        <div class="folder-meta">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 4.5A1.5 1.5 0 0 1 4 3h4l1.5 2H16a1.5 1.5 0 0 1 1.5 1.5V15A1.5 1.5 0 0 1 16 16.5H4A1.5 1.5 0 0 1 2.5 15V4.5Z"/></svg>
+          <span id="folder-name" class="folder-name" title="未打开文件夹">未打开文件夹</span>
+        </div>
+        <div class="sidebar-actions">
+          <button id="btn-new-file" class="mini-btn" title="新建 Markdown 文件" aria-label="新建文件">+</button>
+          <button id="btn-new-folder" class="mini-btn" title="新建文件夹" aria-label="新建文件夹">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 4.5A1.5 1.5 0 0 1 4 3h4l1.5 2H16a1.5 1.5 0 0 1 1.5 1.5V15A1.5 1.5 0 0 1 16 16.5H4A1.5 1.5 0 0 1 2.5 15V4.5Zm7 3a1 1 0 0 1 1 1v1h1a1 1 0 1 1 0 2h-1v1a1 1 0 1 1-2 0v-1h-1a1 1 0 1 1 0-2h1v-1a1 1 0 0 1 1-1Z"/></svg>
+          </button>
+          <button id="btn-refresh" class="mini-btn" title="刷新文件树 (F5)" aria-label="刷新">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a7 7 0 1 1-6.6 9.3 1 1 0 1 1 1.9-.6A5 5 0 1 0 6.7 6.5H9a1 1 0 1 1 0 2H4.5a1 1 0 0 1-1-1V3a1 1 0 0 1 2 0v1.1A6.9 6.9 0 0 1 10 3Z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="section-label">文件</div>
+      <div id="file-tree" class="file-tree" role="tree"></div>
+      <div id="sidebar-empty" class="sidebar-empty">
+        <div class="empty-icon">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 4.5A1.5 1.5 0 0 1 4 3h4l1.5 2H16a1.5 1.5 0 0 1 1.5 1.5V15A1.5 1.5 0 0 1 16 16.5H4A1.5 1.5 0 0 1 2.5 15V4.5Z"/></svg>
+        </div>
+        <p>还没有打开文件夹</p>
+        <button id="btn-sidebar-open" class="btn small">选择文件夹</button>
+      </div>
+
+      <div class="sidebar-footer">
+        <span>本地文件</span>
+        <span>UTF-8</span>
+      </div>
+    </aside>
+
+    <div id="sidebar-resizer" class="resizer" role="separator" aria-orientation="vertical" title="拖动调整侧边栏宽度"></div>
+
+    <main class="workspace">
+      <header class="commandbar">
+        <div class="command-group">
+          <button id="btn-open-file" class="btn">打开文件</button>
+          <button id="btn-save" class="btn primary" title="保存 (Ctrl+S)">保存</button>
+        </div>
+        <div class="command-spacer"></div>
+        <button id="btn-find" class="search-pill" title="查找 (Ctrl+F)">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 3a5.5 5.5 0 1 0 3.45 9.78l3.63 3.64a1 1 0 0 0 1.42-1.42l-3.64-3.63A5.5 5.5 0 0 0 8.5 3Zm0 2a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/></svg>
+          <span>查找当前文档</span>
+          <kbd>Ctrl F</kbd>
+        </button>
+        <button id="btn-theme" class="icon-btn" title="切换深色模式 (Ctrl+Shift+D)" aria-label="切换主题">
+          <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M12.9 2.2a7.8 7.8 0 1 0 4.9 11.1A6.6 6.6 0 0 1 12.9 2.2Z"/></svg>
+          <svg class="icon-sun" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5.8a4.2 4.2 0 1 1 0 8.4 4.2 4.2 0 0 1 0-8.4ZM10 1a1 1 0 0 1 1 1v1.2a1 1 0 1 1-2 0V2a1 1 0 0 1 1-1Zm0 14.8a1 1 0 0 1 1 1V18a1 1 0 1 1-2 0v-1.2a1 1 0 0 1 1-1ZM1 10a1 1 0 0 1 1-1h1.2a1 1 0 1 1 0 2H2a1 1 0 0 1-1-1Zm14.8 0a1 1 0 0 1 1-1H18a1 1 0 1 1 0 2h-1.2a1 1 0 0 1-1-1ZM3.6 3.6a1 1 0 0 1 1.4 0l.9.9A1 1 0 0 1 4.5 5.9l-.9-.9a1 1 0 0 1 0-1.4Zm10.5 10.5a1 1 0 0 1 1.4 0l.9.9a1 1 0 0 1-1.4 1.4l-.9-.9a1 1 0 0 1 0-1.4Zm1.4-10.5a1 1 0 0 1 0 1.4l-.9.9a1 1 0 0 1-1.4-1.4l.9-.9a1 1 0 0 1 1.4 0ZM5.9 14.1a1 1 0 0 1 0 1.4l-.9.9a1 1 0 0 1-1.4-1.4l.9-.9a1 1 0 0 1 1.4 0Z"/></svg>
+        </button>
+        <button id="btn-sidebar" class="icon-btn" title="显示/隐藏侧边栏 (Ctrl+Shift+E)" aria-label="侧边栏">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 3h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm1 2v10h4V5H4Zm6 0v10h6V5H10Z"/></svg>
+        </button>
+      </header>
+
+      <section class="document-card">
+        <div id="tabbar" class="tabbar" role="tablist"></div>
+        <div class="editor-shell">
+          <div id="welcome" class="welcome">
+            <div class="welcome-card">
+              <div class="welcome-logo">R</div>
+              <h1>ReadMD</h1>
+              <p class="welcome-sub">本地 Markdown 阅读与编辑，文件始终在你自己的磁盘上。打开一个文件夹，或者直接打开一份文档开始。</p>
+              <div class="welcome-actions">
+                <button id="welcome-open-folder" class="btn primary big">打开文件夹</button>
+                <button id="welcome-open-file" class="btn big">打开文件</button>
+              </div>
+              <div class="recent-grid">
+                <section class="recent-col">
+                  <h3>最近文件夹</h3>
+                  <ul id="recent-folders" class="recent-list"><li class="recent-empty">暂无记录</li></ul>
+                </section>
+                <section class="recent-col">
+                  <h3>最近文件</h3>
+                  <ul id="recent-files" class="recent-list"><li class="recent-empty">暂无记录</li></ul>
+                </section>
+              </div>
+              <p class="welcome-hint">Ctrl+S 保存 · Ctrl+F 查找 · Ctrl+Shift+D 深色模式</p>
+            </div>
+          </div>
+          <div id="vditor" class="vditor-host"></div>
+          <div id="content-resizer" class="content-resizer hidden" title="拖动调整正文宽度，双击恢复默认"></div>
+          <div id="outline-resizer" class="outline-resizer hidden" title="拖动调整大纲宽度，双击恢复默认"></div>
+        </div>
+        <footer class="statusbar">
+          <div id="status-left" class="status-left">就绪</div>
+          <div class="status-right">
+            <span id="status-count" class="status-item"></span>
+            <span id="status-save" class="status-item"></span>
+          </div>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <div id="findbar" class="findbar hidden">
+    <input id="find-input" type="text" placeholder="在当前文档中查找…" autocomplete="off" spellcheck="false">
+    <span id="find-count" class="find-count">0/0</span>
+    <button id="find-prev" class="find-btn" title="上一个 (Shift+Enter)">↑</button>
+    <button id="find-next" class="find-btn" title="下一个 (Enter)">↓</button>
+    <button id="find-close" class="find-btn" title="关闭 (Esc)">×</button>
+  </div>
+
+  <div id="context-menu" class="context-menu hidden" role="menu"></div>
+  <div id="modal-root" class="modal-root hidden"></div>
+  <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+  <script src="./vendor/vditor/dist/index.min.js"></script>
+  <!-- 预加载工具栏图标：Vditor 的同步加载器会用内联脚本注入，预加载可避免 CSP 拦截 -->
+  <script id="vditorIconScript" src="./vendor/vditor/dist/js/icons/ant.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
