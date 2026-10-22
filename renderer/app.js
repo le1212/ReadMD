@@ -228,6 +228,115 @@ async function restoreSession(savedState) {
 
 /* ------------------------------ 编辑器 ------------------------------ */
 
+// Vditor IR 模式的删除线/加粗/斜体工具栏按钮有两个上游缺陷：
+// 1. 添加分支用 insertHTML 插入 '~~<wbr>文字<wbr>~~'，而 Lute 不解析含 <wbr> 的标记，
+//    结果永远是字面文本（冒烟实证：连点 4 次得到 ~~~~~~~~ABCDEF~~~~~~~~）。
+// 2. 取消依赖 200ms 防抖刷新的按钮高亮，连点时读到旧状态导致行为翻转错乱。
+// 这里在捕获阶段完全接管这三个按钮：直接操作选区构造/摘除干净的 IR 行内节点，
+// 再触发 input 让 Vditor 重解析，行为不再依赖按钮高亮与 insertHTML。
+const TOOLBAR_TOGGLE_TYPES = { strike: 's', bold: 'strong', italic: 'em' };
+const TOOLBAR_TOGGLE_MARKERS = { s: '~~', strong: '**', em: '*' };
+
+function buildInlineNode(tag, marker, text) {
+  const wrapper = document.createElement('span');
+  wrapper.setAttribute('data-type', tag);
+  wrapper.className = 'vditor-ir__node';
+  const before = document.createElement('span');
+  before.className = 'vditor-ir__marker';
+  before.textContent = marker;
+  const inner = document.createElement(tag);
+  inner.setAttribute('data-newline', '1');
+  inner.textContent = text;
+  const after = document.createElement('span');
+  after.className = 'vditor-ir__marker';
+  after.textContent = marker;
+  wrapper.append(before, inner, after);
+  return wrapper;
+}
+
+// 把一次 DOM 变更交给 Vditor 重解析并同步 ReadMD 的输入状态
+function resyncEditorAfterDomChange() {
+  const core = state.vditor && state.vditor.vditor;
+  if (!core) return;
+  try {
+    state.vditor.vditor.ir.element.dispatchEvent(new Event('input', { bubbles: true }));
+  } catch {
+    // 重解析失败时下一次用户输入会自然同步
+  }
+}
+
+function setupToolbarClickGuard() {
+  // 必须绑定在工具栏容器（祖先）的捕获阶段：target 元素上 Vditor 的监听器注册更早，
+  // 只有祖先捕获才能保证守卫先于 Vditor 执行。
+  const toolbar = document.querySelector('.vditor-toolbar');
+  if (!toolbar || toolbar.dataset.readmdGuard === '1') return;
+  toolbar.dataset.readmdGuard = '1';
+  toolbar.addEventListener('click', (event) => {
+    const button = event.target && event.target.closest
+      ? event.target.closest('.vditor-toolbar__item > [data-type]')
+      : null;
+    if (!button || !toolbar.contains(button)) return;
+    const tag = TOOLBAR_TOGGLE_TYPES[button.getAttribute('data-type')];
+    if (!tag) return;
+    const core = state.vditor && state.vditor.vditor;
+    const editable = core && core[core.currentMode] && core[core.currentMode].element;
+    if (!editable) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!editable.contains(range.startContainer)) return;
+
+    let node = range.startContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    const inlineNode = node && node.closest && node.closest(`[data-type="${tag}"]`);
+    if (inlineNode && editable.contains(inlineNode)) {
+      // 取消：摘除包裹，把文字放回原处。注意 marker span（~~ / ** / *）是可见文本节点，
+      // 直接取 textContent 会把标记字符并进正文（变成字面 ~~），必须剔除后再替换。
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      try {
+        const content = inlineNode.cloneNode(true);
+        content.querySelectorAll('.vditor-ir__marker').forEach((marker) => marker.remove());
+        const fragment = document.createDocumentFragment();
+        while (content.firstChild) fragment.appendChild(content.firstChild);
+        inlineNode.replaceWith(fragment);
+        const lastText = fragment.lastChild;
+        const caret = document.createRange();
+        if (lastText && lastText.nodeType === 3) {
+          caret.setStart(lastText, lastText.textContent.length);
+        } else if (lastText) {
+          caret.selectNodeContents(lastText);
+          caret.collapse(false);
+        } else {
+          caret.setStart(inlineNode.parentNode, 0);
+        }
+        caret.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caret);
+        resyncEditorAfterDomChange();
+      } catch (error) {
+        // 摘除失败时退回 Vditor 原逻辑，文档不会损坏
+      }
+      return;
+    }
+
+    const selectedText = range.toString();
+    if (!selectedText) return; // 光标无选区时交给 Vditor 插入空标记对（该路径无 wbr 问题）
+    // 添加：用干净的 IR 节点替换选中文本
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const wrapper = buildInlineNode(tag, TOOLBAR_TOGGLE_MARKERS[tag], selectedText);
+    range.deleteContents();
+    range.insertNode(wrapper);
+    const caret = document.createRange();
+    caret.selectNodeContents(wrapper.querySelector(`${tag}:not(.vditor-ir__marker)`));
+    caret.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(caret);
+    resyncEditorAfterDomChange();
+  }, true);
+}
+
 function createVditor() {
   state.vditorReadyPromise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -297,6 +406,7 @@ function createVditor() {
           state.vditorReady = true;
           observeEditorLayout();
           bindBackTop();
+          setupToolbarClickGuard();
           setTimeout(() => {
             updateContentResizer();
             updateOutlineResizer();
@@ -2944,6 +3054,85 @@ function attachSmokeHooks() {
       };
       setTimeout(check, 50);
     });
+  },
+  async strikeRepeatTest() {
+    // 复现“重复点击删除线结果不一致”：选中文字后不加等待地连续点击工具栏删除线按钮。
+    const tab = activeTab();
+    if (!tab || !state.vditor) return { ok: false, reason: 'no-doc' };
+    await state.vditorReadyPromise;
+
+    state.vditor.setValue('# 删除线连点测试\n\n目标文字段落ABCDEF', true);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const textNode = document.querySelector('.vditor-ir .vditor-reset');
+    if (!textNode) return { ok: false, reason: 'no-editor' };
+    // 用原生选区选中“ABCDEF”，模拟用户鼠标划选
+    const walker = document.createTreeWalker(textNode, NodeFilter.SHOW_TEXT);
+    let target = null;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const index = node.textContent.indexOf('ABCDEF');
+      if (index >= 0) {
+        target = { node, start: index, end: index + 'ABCDEF'.length };
+        break;
+      }
+    }
+    if (!target) return { ok: false, reason: 'text-not-found' };
+
+    const setSelection = () => {
+      // Vditor 每次操作都会重建 DOM，文本节点引用会失效；每次点击前都重新定位
+      const walker = document.createTreeWalker(textNode, NodeFilter.SHOW_TEXT);
+      let node = null;
+      while (walker.nextNode()) {
+        if (walker.currentNode.textContent.includes('ABCDEF')) {
+          node = walker.currentNode;
+          break;
+        }
+      }
+      if (!node) return false;
+      const start = node.textContent.indexOf('ABCDEF');
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, start + 'ABCDEF'.length);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return true;
+    };
+
+    const strikeButton = document.querySelector('.vditor-toolbar [data-type="strike"]');
+    if (!strikeButton) return { ok: false, reason: 'no-strike-button' };
+
+    const clickOnce = async () => {
+      if (!setSelection()) return false;
+      strikeButton.click();
+      // 只留极小间隔，模拟用户快速连点（真实用户点击间隔可小于 Vditor 的 200ms 高亮防抖）
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return true;
+    };
+
+    const rounds = [];
+    let lastMarkdown = '';
+    for (let round = 0; round < 4; round += 1) {
+      // 每轮：重新选中目标文字，点 1 次按钮，稳定后取文档状态；应交替在 striked / plain 间翻转
+      if (!(await clickOnce())) {
+        rounds.push('no-selection');
+        break;
+      }
+      // 等 Vditor 的 200ms 高亮防抖 + 800ms 输入防抖彻底走完，取“稳定后”的文档状态
+      await new Promise((resolve) => setTimeout(resolve, 1150));
+      lastMarkdown = state.vditor.getValue();
+      rounds.push(lastMarkdown.includes('~~ABCDEF~~') ? 'striked' : (lastMarkdown.includes('ABCDEF') ? 'plain' : 'lost'));
+    }
+
+    // 每次点击都重新选中同一处文字：正确行为是严格交替翻转（加线→去线→加线→去线），
+    // 且任何一轮都不能丢失文字或叠加标记（~~~~）
+    const expected = ['striked', 'plain', 'striked', 'plain'];
+    return {
+      ok: rounds.length === expected.length && rounds.every((value, index) => value === expected[index]),
+      rounds,
+      markdownTail: lastMarkdown.split('\n').slice(-2).join(' / ')
+    };
   },
   async backTopTest() {
     const filler = Array.from({ length: 60 }, (_, index) => `第 ${index + 1} 段用于验证回到顶部按钮。`).join('\n\n');

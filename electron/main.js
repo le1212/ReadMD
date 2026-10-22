@@ -1427,6 +1427,10 @@ function runSmokeTest() {
 
       // 回到顶部按钮：滚动后出现，回顶后自动隐藏
       try {
+        // 快速连点删除线：每次点击后文档状态应当确定地翻转（加线/去线），不允许漂移
+        const strikeRepeat = await run('window.__readmdSmoke.strikeRepeatTest().catch((error) => ({ ok: false, hookError: String((error && error.stack) || error) }))');
+        console.log('[smoke] strike repeat test', JSON.stringify(strikeRepeat));
+        if (!strikeRepeat || !strikeRepeat.ok) failures.push('快速连点删除线结果不一致');
         const backTop = await run('window.__readmdSmoke.backTopTest()');
         console.log('[smoke] back top test', JSON.stringify(backTop));
         if (!backTop || !backTop.ok) failures.push('回到顶部按钮测试失败');
