@@ -13,6 +13,36 @@
 - macOS / Linux 打包
 - 单元测试与 GitHub Actions CI
 
+## [0.5.0] - 2026-11-16
+
+### Added
+
+- **HTML / JSON / PDF / DOCX 只读预览**：文件树、打开对话框、最近文件和系统传参都能识别；HTML 支持预览/源码切换，JSON 格式化分色，PDF 用 pdf.js 逐页渲染，DOCX 用 mammoth 转 HTML
+- 非 Markdown 标签页自动隐藏保存、导出、AI 和编辑工具栏，状态栏显示“只读”；关闭时不会询问保存
+- HTML 预览在 Shadow DOM 内渲染，移除脚本、iframe、表单和事件属性，外链交给系统浏览器；冒烟测试断言预览里的脚本不会执行
+- 打包版启动时自动把 ReadMD 加入 `.md` 的“打开方式”候选列表；用户主动移除后不再自动注册
+- 顶部新增设置入口（图标），可直接打开“默认打开方式”和“导出设置”
+- **HTML 一键美化**：HTML 预览工具栏新增“美化”按钮，去掉网页作者样式，套用 ReadMD 的统一阅读排版；再次点击恢复原始样式
+- **新增 NSIS 安装版**：`ReadMD-0.5.0-setup.exe`，按当前用户安装、无需管理员权限；安装后启动不再解压，打开文档明显更快（实测约 3 秒出现窗口）
+- 冒烟测试新增 HTML / JSON / PDF / DOCX 预览、只读状态、HTML 一键美化、Markdown 表格自适应检查
+
+### Changed
+
+- 文件菜单与打开对话框标题从“Markdown 文件”改为“文件”，过滤器按文档类型分组
+- Markdown 表格改为随正文宽度自适应：单元格自动换行、表头不折行，不再强制横向滚动
+- 导出设置移除重复说明，封面字段改为仅在启用封面时显示
+- AI 设置移除分区标题和重复提示，保留隐私与必要状态说明
+- 侧边栏移除“文件”小标题、品牌副标题和底部“本地文件 / UTF-8”装饰文字
+- 新增生产依赖：`mammoth@1.13.0`（BSD-2-Clause）、`pdfjs-dist@6.5.438`（Apache-2.0）；pdf.js 运行时文件通过 `scripts/prepare-pdfjs.js` 复制到 `renderer/vendor`
+- 版本号提升到 0.5.0
+
+### Verification
+
+- `npm run smoke` 通过：新增预览用例输出 `html scriptRan=false`、`json keys=6`、`pdf pages=1`、DOCX 文本包含 `ReadMD`；HTML 一键美化后标题颜色回到正文色、作者样式被移除；Markdown 表格 `display=table`、单元格 `white-space=normal`、表格宽度不超过正文
+- 打包版 `dist/win-unpacked/ReadMD.exe --smoke-test` 通过（`smoke-result.json` 为 `pass: true`，0 项失败）
+- 启动耗时实测（隔离配置）：安装版布局约 3.1 秒出现窗口；便携版每次启动需解压 105 MB，约 20–60 秒
+- 生产依赖 `npm audit --omit=dev` 为 0 漏洞
+
 ## [0.4.1] - 2026-10-22
 
 ### Fixed

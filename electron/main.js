@@ -23,6 +23,8 @@ const fileAssociation = require('./file-association');
 
 const APP_NAME = 'ReadMD';
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt', '.text']);
+const PREVIEW_EXTENSIONS = new Set(['.html', '.htm', '.json', '.pdf', '.docx']);
+const OPENABLE_EXTENSIONS = new Set([...MARKDOWN_EXTENSIONS, ...PREVIEW_EXTENSIONS]);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 const MAX_FILE_SIZE = 32 * 1024 * 1024;
 const MAX_IMAGE_SIZE = 25 * 1024 * 1024;
@@ -59,6 +61,7 @@ const defaultState = {
   sidebarWidth: 278,
   editorContentWidth: 920,
   outlineWidth: 230,
+  associationOptOut: false,
   exportSettings: {
     formal: false,
     header: false,
@@ -256,21 +259,48 @@ function markdownFileInfo(filePath, stat) {
   };
 }
 
+function documentKind(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.json') return 'json';
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.docx') return 'docx';
+  return null;
+}
+
 async function readMarkdownFile(filePath) {
   await assertAllowed(filePath);
   const stat = await fsp.stat(filePath);
   if (!stat.isFile()) throw new Error('这不是一个文件');
   if (stat.size > MAX_FILE_SIZE) throw new Error('文件超过 32 MB，暂不支持打开');
+
+  const kind = documentKind(filePath);
+  if (!kind) throw new Error('暂不支持打开这种文件');
+
+  if (kind === 'pdf' || kind === 'docx') {
+    await addFile(filePath);
+    return {
+      ...markdownFileInfo(filePath, stat),
+      kind,
+      content: '',
+      eol: '\n',
+      readOnly: true
+    };
+  }
+
   const buffer = await fsp.readFile(filePath);
-  if (buffer.includes(0)) throw new Error('这看起来是二进制文件，无法作为 Markdown 打开');
+  if (buffer.includes(0)) throw new Error('这看起来是二进制文件，无法打开');
   let content = buffer.toString('utf8');
   if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
   const eol = content.includes('\r\n') ? '\r\n' : '\n';
   await addFile(filePath);
   return {
     ...markdownFileInfo(filePath, stat),
+    kind,
     content,
-    eol
+    eol,
+    readOnly: kind !== 'markdown'
   };
 }
 
@@ -495,18 +525,18 @@ if (!gotSingleInstanceLock) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
-    const files = findMarkdownArguments(argv);
+    const files = findOpenableArguments(argv);
     if (files.length) openPathsFromSystem(files);
   });
 }
 
-function findMarkdownArguments(argv) {
+function findOpenableArguments(argv) {
   const files = [];
   const seen = new Set();
   for (let i = 1; i < argv.length; i += 1) {
     const candidate = argv[i];
     if (!candidate) continue;
-    if (!MARKDOWN_EXTENSIONS.has(path.extname(candidate).toLowerCase())) continue;
+    if (!OPENABLE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) continue;
     try {
       if (!fs.statSync(candidate).isFile()) continue;
       const resolved = path.resolve(candidate);
@@ -1357,6 +1387,206 @@ function runSmokeTest() {
         fs.rmSync(featureDir, { recursive: true, force: true });
       }
 
+      // 只读预览：HTML / JSON / PDF / DOCX
+      const previewDir = path.join(os.tmpdir(), `readmd-preview-${process.pid}`);
+      fs.mkdirSync(path.join(previewDir, 'assets'), { recursive: true });
+      await addRoot(previewDir);
+      fs.copyFileSync(
+        path.join(sampleDir, 'assets', 'smoke-image.png'),
+        path.join(previewDir, 'assets', 'smoke-image.png')
+      );
+      const previewHtmlFile = path.join(previewDir, 'preview.html');
+      const previewJsonFile = path.join(previewDir, 'data.json');
+      const previewPdfFile = path.join(previewDir, 'preview.pdf');
+      const previewDocxFile = path.join(previewDir, 'preview.docx');
+      fs.writeFileSync(previewHtmlFile, [
+        '<!doctype html><html><head><title>预览</title>',
+        '<style>body{font-family:sans-serif}.hero{color:#2f6fed}</style></head><body>',
+        '<h1 id="preview-heading" class="hero">HTML 预览标题</h1>',
+        '<p><img src="assets/smoke-image.png" alt="smoke"></p>',
+        '<p onclick="window.__readmdPreviewEvent = true">可点击文字</p>',
+        '<script>window.__readmdPreviewScriptRan = true;</script>',
+        '</body></html>'
+      ].join(''), 'utf8');
+      fs.writeFileSync(previewJsonFile, JSON.stringify({
+        name: 'ReadMD', version: 1, enabled: true, empty: null, nested: { list: [1, 2, 3] }
+      }, null, 2), 'utf8');
+      try {
+        const previewPayload = await run('window.__readmdSmoke.exportPayload()');
+        await run(`window.readmd.exportPdfTest(${JSON.stringify(previewPayload)}, ${JSON.stringify(previewPdfFile)})`);
+        await run(`window.readmd.exportDocxTest(${JSON.stringify(previewPayload)}, ${JSON.stringify(previewDocxFile)})`);
+
+        const checkPreview = (kind) => run(`(() => {
+          const host = document.getElementById('preview-host');
+          const doc = host ? host.querySelector('.preview-doc') : null;
+          const shadow = doc && doc.shadowRoot;
+          const content = shadow ? shadow.querySelector('.preview-content') : doc;
+          return {
+            kind: ${JSON.stringify(kind)},
+            visible: Boolean(host && !host.hidden),
+            vditorHidden: Boolean(document.getElementById('vditor') && document.getElementById('vditor').hidden),
+            saveHidden: Boolean(document.getElementById('btn-save') && document.getElementById('btn-save').hidden),
+            text: (content ? content.textContent : '').slice(0, 4000),
+            shadowImages: shadow ? shadow.querySelectorAll('img').length : 0,
+            pdfPages: host ? host.querySelectorAll('canvas.pdf-page').length : 0,
+            jsonKeys: host ? host.querySelectorAll('.json-key').length : 0,
+            scriptRan: Boolean(window.__readmdPreviewScriptRan),
+            status: (document.getElementById('status-count') || {}).textContent || ''
+          };
+        })()`);
+
+        // HTML 预览：内容渲染、图片加载、脚本/事件不执行、只读状态
+        await run(`window.__readmdSmoke.openPath(${JSON.stringify(previewHtmlFile)})`);
+        await wait(700);
+        const htmlPreview = await checkPreview('html');
+        if (!htmlPreview || !htmlPreview.visible || !htmlPreview.vditorHidden) failures.push('HTML 预览未进入只读视图');
+        if (!htmlPreview || !/HTML 预览标题/.test(htmlPreview.text)) failures.push('HTML 预览内容缺失');
+        if (!htmlPreview || htmlPreview.scriptRan) failures.push('HTML 预览执行了脚本');
+        if (!htmlPreview || htmlPreview.shadowImages < 1) failures.push('HTML 预览图片未渲染');
+        await run(`(() => {
+          const doc = document.querySelector('#preview-host .preview-doc');
+          const target = doc && doc.shadowRoot
+            ? Array.from(doc.shadowRoot.querySelectorAll('p')).find((node) => node.textContent.includes('可点击文字'))
+            : null;
+          if (target) target.click();
+        })()`);
+        const previewEventRan = await run('Boolean(window.__readmdPreviewEvent)');
+        if (previewEventRan) failures.push('HTML 预览执行了事件属性');
+        if (!htmlPreview || !htmlPreview.saveHidden || htmlPreview.status !== '只读') failures.push('HTML 预览未隐藏保存/只读状态');
+        const previewLayout = await run(`(() => ({
+          vditorDisplay: getComputedStyle(document.getElementById('vditor')).display,
+          saveDisplay: getComputedStyle(document.getElementById('btn-save')).display,
+          exportDisplay: getComputedStyle(document.getElementById('btn-export')).display,
+          aiDisplay: getComputedStyle(document.getElementById('btn-ai')).display,
+          contentResizer: document.getElementById('content-resizer').className,
+          outlineResizer: document.getElementById('outline-resizer').className,
+          docWidth: Math.round(document.querySelector('#preview-host .preview-doc').getBoundingClientRect().width)
+        }))()`);
+        console.log('[smoke] preview layout', JSON.stringify(previewLayout));
+        fs.writeFileSync(path.join(screenshotDir, 'smoke-preview-html.png'), (await capture()).toPNG());
+
+        // 一键美化：去掉作者样式，套用阅读排版
+        await run("document.querySelector('.preview-tool-text').click()");
+        await wait(300);
+        const htmlBeautified = await run(`(() => {
+          const doc = document.querySelector('#preview-host .preview-doc');
+          const root = doc && doc.shadowRoot;
+          const content = root && root.querySelector('.preview-content');
+          const heading = content && content.querySelector('h1');
+          return {
+            beautified: Boolean(content && content.classList.contains('beautified')),
+            color: heading ? getComputedStyle(heading).color : '',
+            styles: root ? root.querySelectorAll('style').length : 0
+          };
+        })()`);
+        if (!htmlBeautified || !htmlBeautified.beautified) failures.push('HTML 一键美化未生效');
+        if (htmlBeautified && htmlBeautified.color === 'rgb(47, 111, 237)') failures.push('HTML 美化未覆盖作者样式');
+        if (htmlBeautified && htmlBeautified.styles > 1) failures.push('HTML 美化未移除作者样式');
+        fs.writeFileSync(path.join(screenshotDir, 'smoke-preview-html-beautify.png'), (await capture()).toPNG());
+        console.log('[smoke] html beautify', JSON.stringify(htmlBeautified));
+
+        // 源码切换
+        await run("document.querySelectorAll('.preview-tool')[1].click()");
+        await wait(300);
+        const htmlSource = await run("document.querySelector('#preview-host .preview-doc').textContent.slice(0, 500)");
+        if (!/<h1|preview-heading/.test(htmlSource || '')) failures.push('HTML 源码视图缺失');
+
+        // JSON 格式化视图
+        await run(`window.__readmdSmoke.openPath(${JSON.stringify(previewJsonFile)})`);
+        await wait(500);
+        console.log('[smoke] json active', JSON.stringify(await run("document.querySelector('.tab.active .tab-title')?.textContent || ''")));
+        const jsonPreview = await checkPreview('json');
+        if (!jsonPreview || !jsonPreview.visible || jsonPreview.jsonKeys < 2) failures.push('JSON 预览未渲染键名高亮');
+        if (!jsonPreview || !/"name"/.test(jsonPreview.text)) failures.push('JSON 预览内容缺失');
+        if (!jsonPreview || !jsonPreview.saveHidden || jsonPreview.status !== '只读') failures.push('JSON 预览未隐藏保存/只读状态');
+        fs.writeFileSync(path.join(screenshotDir, 'smoke-preview-json.png'), (await capture()).toPNG());
+
+        // PDF 预览
+        await run(`window.__readmdSmoke.openPath(${JSON.stringify(previewPdfFile)})`);
+        let pdfPreview = null;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          await wait(500);
+          pdfPreview = await checkPreview('pdf');
+          if (pdfPreview && pdfPreview.pdfPages > 0) break;
+        }
+        console.log('[smoke] pdf active', JSON.stringify(await run("document.querySelector('.tab.active .tab-title')?.textContent || ''")));
+        if (!pdfPreview || !pdfPreview.visible || pdfPreview.pdfPages < 1) failures.push('PDF 预览未渲染页面');
+        if (!pdfPreview || !pdfPreview.saveHidden || pdfPreview.status !== '只读') failures.push('PDF 预览未隐藏保存/只读状态');
+        if (!pdfPreview || pdfPreview.pdfPages < 1) {
+          const pdfDetail = await run(`(() => {
+            const host = document.getElementById('preview-host');
+            return { text: host ? host.textContent.slice(0, 800) : '', canvases: host ? host.querySelectorAll('canvas').length : 0 };
+          })()`);
+          console.log('[smoke] pdf detail', JSON.stringify(pdfDetail));
+          failures.push(`PDF 预览细节：${JSON.stringify(pdfDetail)}`);
+        }
+        fs.writeFileSync(path.join(screenshotDir, 'smoke-preview-pdf.png'), (await capture()).toPNG());
+
+        // DOCX 预览
+        await run(`window.__readmdSmoke.openPath(${JSON.stringify(previewDocxFile)})`);
+        await wait(1800);
+        const docxPreview = await checkPreview('docx');
+        if (!docxPreview || !docxPreview.visible || !/ReadMD/.test(docxPreview.text)) failures.push('DOCX 预览内容缺失');
+        if (!docxPreview || !docxPreview.saveHidden || docxPreview.status !== '只读') failures.push('DOCX 预览未隐藏保存/只读状态');
+        fs.writeFileSync(path.join(screenshotDir, 'smoke-preview-docx.png'), (await capture()).toPNG());
+
+        console.log('[smoke] preview test', JSON.stringify({
+          html: { visible: htmlPreview && htmlPreview.visible, scriptRan: htmlPreview && htmlPreview.scriptRan, status: htmlPreview && htmlPreview.status },
+          json: { keys: jsonPreview && jsonPreview.jsonKeys },
+          pdf: { pages: pdfPreview && pdfPreview.pdfPages },
+          docx: { text: docxPreview && docxPreview.text.slice(0, 60) }
+        }));
+
+        // 关闭预览标签，回到 Markdown
+        for (let index = 0; index < 4; index += 1) {
+          await run('window.__readmdSmoke.closeActiveWithoutSaving()');
+          await wait(200);
+        }
+        const afterPreview = await run('window.__readmdSmoke.diagnostics()');
+        if (!afterPreview || afterPreview.tabs !== 1) failures.push('关闭预览标签后未回到原文档');
+
+        // Markdown 表格自适应：列多、文字长时不再强制横向滚动
+        const tableFile = path.join(previewDir, 'table.md');
+        fs.writeFileSync(tableFile, [
+          '# 表格自适应',
+          '',
+          '| 模块 | 说明 | 负责人 | 状态 | 备注 |',
+          '| --- | --- | --- | --- | --- |',
+          '| 文件树 | 显示当前文件夹里的所有可阅读文档，包含 Markdown、HTML、JSON、PDF 和 Word | 产品与研发 | 已完成 | 需要覆盖长文本换行和窄窗口场景 |',
+          '| 预览 | HTML 静态预览、JSON 格式化、PDF 逐页渲染、DOCX 语义化转换 | 研发 | 进行中 | 表格、图片和代码块不能撑破正文区域 |',
+          '| 设置 | 默认打开方式、导出设置、主题和 AI 配置 | 研发 | 待验证 | 保持布局清晰，避免重复说明 |'
+        ].join('\n'), 'utf8');
+        await run(`window.__readmdSmoke.openPath(${JSON.stringify(tableFile)})`);
+        await wait(900);
+        const tableInfo = await run(`(() => {
+          const table = document.querySelector('.vditor-reset table');
+          const ir = document.querySelector('.vditor-ir');
+          if (!table || !ir) return null;
+          const cell = table.querySelector('td');
+          return {
+            display: getComputedStyle(table).display,
+            whiteSpace: cell ? getComputedStyle(cell).whiteSpace : '',
+            tableWidth: table.getBoundingClientRect().width,
+            irWidth: ir.getBoundingClientRect().width,
+            scrollWidth: table.scrollWidth,
+            clientWidth: table.clientWidth
+          };
+        })()`);
+        if (!tableInfo) {
+          failures.push('Markdown 表格未渲染');
+        } else {
+          if (tableInfo.display !== 'table') failures.push('Markdown 表格未改为自适应布局');
+          if (tableInfo.whiteSpace !== 'normal') failures.push('Markdown 表格单元格未允许换行');
+          if (tableInfo.tableWidth > tableInfo.irWidth + 2) failures.push('Markdown 表格超出正文宽度');
+        }
+        fs.writeFileSync(path.join(screenshotDir, 'smoke-table.png'), (await capture()).toPNG());
+        console.log('[smoke] table layout', JSON.stringify(tableInfo));
+        await run('window.__readmdSmoke.closeActiveWithoutSaving()');
+        await wait(250);
+      } finally {
+        fs.rmSync(previewDir, { recursive: true, force: true });
+      }
+
       const before = await run('window.__readmdSmoke.diagnostics()');
       const appended = await run("window.__readmdSmoke.appendText('\\n\\n<!-- readmd smoke test -->')");
       if (!appended) failures.push('输入测试未执行');
@@ -1496,18 +1726,27 @@ function ensureAssociationSample(activeFile) {
   return sample;
 }
 
-/** 用户拖动过便携版 exe 后，把关联里的旧路径自动更新为新路径。 */
-async function refreshPortableAssociation() {
+/**
+ * 打包版启动时维护“打开方式”候选身份：
+ * - 从未注册：自动加入候选列表（不修改系统默认程序）；
+ * - 便携版 exe 被移动：把旧路径自动更新为新路径；
+ * - 用户主动移除过：尊重选择，不再自动注册。
+ */
+async function ensureFileAssociation() {
   if (process.platform !== 'win32' || IS_SMOKE_TEST || !app.isPackaged) return;
+  if (appState.associationOptOut) return;
   try {
     const info = getExecutableInfo();
     const status = await fileAssociation.getStatus(info);
-    if (status.registered && !status.commandMatches) {
+    if (!status.registered) {
+      await fileAssociation.register(info);
+      console.log('[ReadMD] 已加入“打开方式”候选列表:', info.exePath);
+    } else if (!status.commandMatches) {
       await fileAssociation.register(info);
       console.log('[ReadMD] 已更新文件关联的程序路径:', info.exePath);
     }
   } catch (error) {
-    console.error('[ReadMD] 更新文件关联失败', error);
+    console.error('[ReadMD] 维护文件关联失败', error);
   }
 }
 
@@ -1528,7 +1767,7 @@ app.whenReady().then(async () => {
 
   buildMenu();
   createWindow();
-  refreshPortableAssociation();
+  ensureFileAssociation();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1563,7 +1802,7 @@ ipcMain.handle('app:init', () => {
 
 ipcMain.on('app:renderer-ready', async () => {
   rendererReady = true;
-  const argvFiles = findMarkdownArguments(process.argv);
+  const argvFiles = findOpenableArguments(process.argv);
   const payload = mergeOpenPayloads(
     pendingOpenPaths,
     argvFiles.length ? { files: argvFiles } : null
@@ -1646,10 +1885,13 @@ ipcMain.handle('dialog:open-folder', async () => {
 
 ipcMain.handle('dialog:open-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '打开 Markdown 文件',
+    title: '打开文件',
     properties: ['openFile'],
     filters: [
+      { name: '可阅读的文档', extensions: ['md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm', 'json', 'pdf', 'docx'] },
       { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'txt'] },
+      { name: '网页与数据', extensions: ['html', 'htm', 'json'] },
+      { name: 'PDF / Word', extensions: ['pdf', 'docx'] },
       { name: '所有文件', extensions: ['*'] }
     ]
   });
@@ -1658,7 +1900,7 @@ ipcMain.handle('dialog:open-file', async () => {
   await addRoot(path.dirname(filePath));
   await addFile(filePath);
   rememberFile(filePath);
-  return markdownFileInfo(filePath, await fsp.stat(filePath));
+  return { ...markdownFileInfo(filePath, await fsp.stat(filePath)), kind: documentKind(filePath) };
 });
 
 ipcMain.handle('fs:read-dir', async (_event, dirPath) => {
@@ -1685,6 +1927,32 @@ ipcMain.handle('fs:read-dir', async (_event, dirPath) => {
 });
 
 ipcMain.handle('fs:read-file', async (_event, filePath) => readMarkdownFile(filePath));
+
+ipcMain.handle('fs:read-binary', async (_event, filePath) => {
+  await assertAllowed(filePath);
+  const stat = await fsp.stat(filePath);
+  if (!stat.isFile()) throw new Error('这不是一个文件');
+  if (stat.size > MAX_FILE_SIZE) throw new Error('文件超过 32 MB，暂不支持打开');
+  const buffer = await fsp.readFile(filePath);
+  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+});
+
+ipcMain.handle('document:docx-html', async (_event, filePath) => {
+  await assertAllowed(filePath);
+  if (path.extname(String(filePath || '')).toLowerCase() !== '.docx') {
+    throw new Error('只支持 .docx 文件；旧版 .doc 请先另存为 .docx');
+  }
+  const stat = await fsp.stat(filePath);
+  if (!stat.isFile()) throw new Error('这不是一个文件');
+  if (stat.size > MAX_FILE_SIZE) throw new Error('文件超过 32 MB，暂不支持打开');
+  const mammoth = require('mammoth');
+  const buffer = await fsp.readFile(filePath);
+  const result = await mammoth.convertToHtml({ buffer }, { convertImage: mammoth.images.dataUri });
+  return {
+    html: result.value || '',
+    messages: (result.messages || []).slice(0, 20).map((item) => item.message)
+  };
+});
 
 ipcMain.handle('fs:write-file', async (_event, filePath, content, eol) => {
   await assertAllowed(filePath);
@@ -2084,12 +2352,16 @@ ipcMain.handle('app:file-association-register', async () => {
   }
   const info = getExecutableInfo();
   await fileAssociation.register(info);
+  appState.associationOptOut = false;
+  persistState();
   return fileAssociation.getStatus(info);
 });
 
 ipcMain.handle('app:file-association-remove', async () => {
   const info = getExecutableInfo();
   await fileAssociation.unregister(info);
+  appState.associationOptOut = true;
+  persistState();
   return fileAssociation.getStatus(info);
 });
 
@@ -2099,6 +2371,8 @@ ipcMain.handle('app:file-association-setup', async (_event, activeFile) => {
   }
   const info = getExecutableInfo();
   await fileAssociation.register(info);
+  appState.associationOptOut = false;
+  persistState();
   // 给资源管理器一点时间刷新“打开方式”候选列表
   await new Promise((resolve) => setTimeout(resolve, 250));
   fileAssociation.openWithDialog(ensureAssociationSample(activeFile));

@@ -2,9 +2,13 @@
 
 const api = window.readmd;
 const MD_EXT = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt', '.text']);
+const PREVIEW_EXT = new Set(['.html', '.htm', '.json', '.pdf', '.docx']);
+const DOC_EXT = new Set([...MD_EXT, ...PREVIEW_EXT]);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 const AUTOSAVE_MS = 900;
 const MAX_RECENT = 8;
+const MAX_PREVIEW_TEXT = 8 * 1024 * 1024;
+const MAX_PDF_PAGES = 200;
 const CDN = new URL('./vendor/vditor', location.href).href.replace(/\/$/, '');
 
 const state = {
@@ -72,7 +76,8 @@ const els = {
   modalRoot: document.getElementById('modal-root'),
   toastHost: document.getElementById('toast-host'),
   recentFolders: document.getElementById('recent-folders'),
-  recentFiles: document.getElementById('recent-files')
+  recentFiles: document.getElementById('recent-files'),
+  previewHost: document.getElementById('preview-host')
 };
 
 /* ------------------------------ 工具函数 ------------------------------ */
@@ -103,6 +108,26 @@ function extOf(name) {
 
 function isMarkdown(entry) {
   return MD_EXT.has(entry.ext || extOf(entry.name));
+}
+
+function kindOf(nameOrEntry) {
+  const ext = typeof nameOrEntry === 'string'
+    ? extOf(nameOrEntry)
+    : (nameOrEntry.ext || extOf(nameOrEntry.name));
+  if (MD_EXT.has(ext)) return 'markdown';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.json') return 'json';
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.docx') return 'docx';
+  return null;
+}
+
+function isOpenable(entry) {
+  return Boolean(kindOf(entry));
+}
+
+function isPreviewTab(tab) {
+  return Boolean(tab && tab.kind && tab.kind !== 'markdown');
 }
 
 function isImage(entry) {
@@ -431,6 +456,7 @@ let backTopScroller = null;
 
 // Vditor 各模式的滚动容器不同：IR/WYSIWYG 是可编辑的 pre，预览模式是 preview 面板。
 function editorScroller() {
+  if (isPreviewTab(activeTab()) && els.previewHost) return els.previewHost;
   const core = state.vditor && state.vditor.vditor;
   if (!core) return null;
   if (core.preview && core.preview.element && core.preview.element.style.display === 'block') {
@@ -443,6 +469,10 @@ function editorScroller() {
 function updateBackTopPosition() {
   if (!els.backTop) return;
   // 按钮停在大纲左侧，避免遮住大纲和控制柄；大纲隐藏时自动贴回正文右缘。
+  if (isPreviewTab(activeTab())) {
+    els.backTop.style.right = '20px';
+    return;
+  }
   const outline = document.querySelector('.vditor-outline');
   const outlineWidth = outline && outline.offsetWidth > 0 ? outline.offsetWidth : 0;
   els.backTop.style.right = `${outlineWidth + 20}px`;
@@ -579,9 +609,9 @@ async function activateTab(ref, options = {}) {
 
   const previous = activeTab();
   if (previous && !samePath(previous.path || previous.id, tab.path || tab.id)) {
-    syncActiveContent();
+    if (!isPreviewTab(previous)) syncActiveContent();
     clearTimeout(state.autoSaveTimer);
-    if (previous.dirty && previous.path) {
+    if (!isPreviewTab(previous) && previous.dirty && previous.path) {
       await saveTab(previous, { silent: true, auto: true });
     }
   }
@@ -589,47 +619,55 @@ async function activateTab(ref, options = {}) {
   if (state.findVisible) closeFind();
 
   state.activePath = tab.path || tab.id;
-  await state.vditorReadyPromise;
-
-  const wasDirty = tab.dirty;
-  tab.loadingBaseline = true;
-  tab.userMutation = false;
-  state.loadingDoc = true;
+  updateEditorMode(tab);
   const token = ++state.docLoadToken;
 
-  try {
-    setLinkBase(tab.dirUrl);
-    state.vditor.setValue(tab.content || '', true);
-  } catch (error) {
-    toast(`打开文档失败：${errorMessage(error)}`, 'error', 5000);
-    console.error('[ReadMD] setValue failed', error);
-  } finally {
-    setTimeout(() => {
-      if (token !== state.docLoadToken) return;
-      state.loadingDoc = false;
-      // Vditor 会把 Markdown 规范化（空行、列表符号等）。刚打开且没有未保存修改时，
-      // 把规范化结果当作新的基线，避免“只切换标签页就触发自动保存”。
-      // 如果这段时间里用户已经编辑（例如插入图片），不能再改基线，否则会漏保存。
-      if (!wasDirty && tab.loadingBaseline && !tab.userMutation) {
-        try {
-          const normalized = state.vditor.getValue();
-          if (normalized !== tab.content) {
-            tab.content = normalized;
-            tab.savedContent = normalized;
-            tab.dirty = false;
-            updateStatus();
-            updateSaveButton();
-            updateTitle();
+  if (isPreviewTab(tab)) {
+    tab.loadingBaseline = false;
+    tab.userMutation = false;
+    state.loadingDoc = false;
+    await renderPreview(tab, token);
+  } else {
+    await state.vditorReadyPromise;
+    const wasDirty = tab.dirty;
+    tab.loadingBaseline = true;
+    tab.userMutation = false;
+    state.loadingDoc = true;
+
+    try {
+      setLinkBase(tab.dirUrl);
+      state.vditor.setValue(tab.content || '', true);
+    } catch (error) {
+      toast(`打开文档失败：${errorMessage(error)}`, 'error', 5000);
+      console.error('[ReadMD] setValue failed', error);
+    } finally {
+      setTimeout(() => {
+        if (token !== state.docLoadToken) return;
+        state.loadingDoc = false;
+        // Vditor 会把 Markdown 规范化（空行、列表符号等）。刚打开且没有未保存修改时，
+        // 把规范化结果当作新的基线，避免“只切换标签页就触发自动保存”。
+        // 如果这段时间里用户已经编辑（例如插入图片），不能再改基线，否则会漏保存。
+        if (!wasDirty && tab.loadingBaseline && !tab.userMutation) {
+          try {
+            const normalized = state.vditor.getValue();
+            if (normalized !== tab.content) {
+              tab.content = normalized;
+              tab.savedContent = normalized;
+              tab.dirty = false;
+              updateStatus();
+              updateSaveButton();
+              updateTitle();
+            }
+          } catch {
+            // 保留原内容
           }
-        } catch {
-          // 保留原内容
         }
-      }
-      tab.loadingBaseline = false;
-      tab.userMutation = false;
-      updateContentResizer();
-      updateBackTopState();
-    }, 80);
+        tab.loadingBaseline = false;
+        tab.userMutation = false;
+        updateContentResizer();
+        updateBackTopState();
+      }, 80);
+    }
   }
 
   els.editorShell.classList.add('has-doc');
@@ -643,7 +681,7 @@ async function activateTab(ref, options = {}) {
   updateOutlineResizer();
   saveSession();
 
-  if (!options.skipFocus) {
+  if (!options.skipFocus && !isPreviewTab(tab)) {
     setTimeout(() => {
       try {
         state.vditor.focus();
@@ -652,6 +690,20 @@ async function activateTab(ref, options = {}) {
       }
     }, 30);
   }
+}
+
+function updateEditorMode(tab) {
+  const preview = isPreviewTab(tab);
+  if (els.vditor) els.vditor.hidden = preview;
+  if (els.previewHost) {
+    els.previewHost.hidden = !preview;
+    if (!preview) els.previewHost.replaceChildren();
+  }
+  for (const id of ['btn-save', 'btn-export', 'btn-ai']) {
+    const button = document.getElementById(id);
+    if (button) button.hidden = preview || !tab;
+  }
+  updateBackTopPosition();
 }
 
 function setLinkBase(dirUrl) {
@@ -670,7 +722,7 @@ function setLinkBase(dirUrl) {
 function syncActiveContent() {
   if (state.loadingDoc || !state.vditor) return;
   const tab = activeTab();
-  if (!tab) return;
+  if (!tab || isPreviewTab(tab)) return;
   let value;
   try {
     value = state.vditor.getValue();
@@ -696,7 +748,7 @@ function syncActiveContent() {
 function handleEditorInput(value) {
   if (state.loadingDoc) return;
   const tab = activeTab();
-  if (!tab) return;
+  if (!tab || isPreviewTab(tab)) return;
   const content = typeof value === 'string' ? value : state.vditor.getValue();
   if (content === tab.content) return;
   tab.loadingBaseline = false;
@@ -730,12 +782,17 @@ async function saveActive(options = {}) {
     toast('当前没有打开的文件');
     return false;
   }
+  if (isPreviewTab(tab)) {
+    toast('该格式为只读预览，无法保存');
+    return false;
+  }
   syncActiveContent();
   return saveTab(tab, options);
 }
 
 function saveTab(tab, options = {}) {
   if (!tab) return Promise.resolve(false);
+  if (isPreviewTab(tab)) return Promise.resolve(false);
   const key = tab.path ? normPath(tab.path) : tab.id;
   if (state.savingTabs.has(key)) return state.savingTabs.get(key);
   const promise = doSaveTab(tab, options).finally(() => {
@@ -803,6 +860,7 @@ async function doSaveTab(tab, options = {}) {
 
 function syncTabContent(tab) {
   if (!tab) return '';
+  if (isPreviewTab(tab)) return tab.content || '';
   if (samePath(tab.path, state.activePath) && !state.loadingDoc && state.vditor) {
     try {
       tab.content = state.vditor.getValue();
@@ -832,6 +890,437 @@ async function saveAndClose() {
   await api.closeWindow();
 }
 
+/* ------------------------------ 只读预览 ------------------------------ */
+
+const PREVIEW_BASE_CSS = `
+.preview-content {
+  font-family: var(--font-ui, "Segoe UI", "Microsoft YaHei", sans-serif);
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--text, #1b1f24);
+  overflow-wrap: anywhere;
+}
+.preview-content h1, .preview-content h2, .preview-content h3,
+.preview-content h4, .preview-content h5, .preview-content h6 {
+  line-height: 1.3;
+  margin: 1.5em 0 .6em;
+  font-weight: 650;
+}
+.preview-content h1 { font-size: 1.9em; }
+.preview-content h2 { font-size: 1.5em; }
+.preview-content h3 { font-size: 1.24em; }
+.preview-content h4 { font-size: 1.08em; }
+.preview-content p { margin: .85em 0; }
+.preview-content a { color: var(--accent, #2f6fed); text-decoration: none; }
+.preview-content a:hover { text-decoration: underline; }
+.preview-content img, .preview-content video {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+.preview-content pre {
+  margin: 1em 0;
+  padding: 14px 16px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--panel-2, #f7f8fa);
+  font-family: var(--font-code, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.preview-content code {
+  padding: .12em .35em;
+  border-radius: 5px;
+  background: var(--panel-2, #f7f8fa);
+  font-family: var(--font-code, Consolas, monospace);
+  font-size: .9em;
+}
+.preview-content pre code { padding: 0; background: none; font-size: inherit; }
+.preview-content blockquote {
+  margin: 1em 0;
+  padding: .1em 0 .1em 1em;
+  border-left: 3px solid var(--border-strong, #d8dde6);
+  color: var(--muted, #6b7280);
+}
+.preview-content table {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: .94em;
+}
+.preview-content th, .preview-content td {
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e5e8ee);
+  text-align: left;
+  vertical-align: top;
+}
+.preview-content th { background: var(--panel-2, #f7f8fa); font-weight: 600; }
+.preview-content hr { margin: 2em 0; border: none; border-top: 1px solid var(--border, #e5e8ee); }
+.preview-content ul, .preview-content ol { padding-left: 1.6em; }
+.preview-content li { margin: .25em 0; }
+.preview-content figure { margin: 1.2em 0; }
+.preview-content figcaption { margin-top: .4em; color: var(--muted, #6b7280); font-size: .85em; }
+`;
+
+const DOCX_PREVIEW_CSS = `
+.preview-content p { margin: .8em 0; }
+.preview-content table { table-layout: auto; }
+`;
+
+let pdfJsPromise = null;
+
+function ensurePdfJs() {
+  if (!pdfJsPromise) {
+    pdfJsPromise = import(new URL('./vendor/pdfjs/pdf.min.mjs', location.href).href).then((pdfjs) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', location.href).href;
+      return pdfjs;
+    });
+  }
+  return pdfJsPromise;
+}
+
+function resolvePreviewUrl(value, dirUrl) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return raw;
+  if (raw.startsWith('#')) return raw;
+  if (/^(data|blob|mailto|tel|about):/i.test(raw)) return raw;
+  if (/^(javascript|vbscript):/i.test(raw)) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+  try {
+    return new URL(raw, dirUrl || location.href).href;
+  } catch {
+    return raw;
+  }
+}
+
+function rewriteCssUrls(css, dirUrl) {
+  return String(css || '').replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (match, quote, url) => {
+    if (/^(data|blob|https?|mailto|tel|#)/i.test(url) || /^[a-z][a-z0-9+.-]*:/i.test(url)) return match;
+    const resolved = resolvePreviewUrl(url, dirUrl);
+    return `url(${quote}${resolved}${quote})`;
+  });
+}
+
+function rewriteSrcset(value, dirUrl) {
+  return String(value || '').split(',').map((part) => {
+    const pieces = part.trim().split(/\s+/);
+    if (!pieces[0]) return '';
+    pieces[0] = resolvePreviewUrl(pieces[0], dirUrl);
+    return pieces.join(' ');
+  }).filter(Boolean).join(', ');
+}
+
+/**
+ * 把本地 HTML 变成可安全放进 Shadow DOM 的静态内容：
+ * 去掉脚本/框架/表单等主动内容与事件属性，把相对地址改成绝对 file:// 地址。
+ */
+function preparePreviewHtml(raw, dirUrl, options = {}) {
+  const doc = new DOMParser().parseFromString(String(raw || ''), 'text/html');
+  if (options.beautify) {
+    // 一键美化：丢掉作者样式，套用 ReadMD 的阅读排版。
+    doc.querySelectorAll('style, link[rel="stylesheet"]').forEach((node) => node.remove());
+  }
+  doc.querySelectorAll(
+    'script, iframe, frame, frameset, object, embed, applet, form, input, button, textarea, select, option, meta, base, foreignObject'
+  ).forEach((node) => node.remove());
+  doc.querySelectorAll('link[rel="preload"], link[rel="modulepreload"], link[rel="prefetch"]')
+    .forEach((node) => node.remove());
+
+  const urlAttrs = new Set(['href', 'src', 'poster', 'action', 'formaction', 'xlink:href', 'background']);
+  for (const element of doc.querySelectorAll('*')) {
+    for (const attr of Array.from(element.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on')) {
+        element.removeAttribute(attr.name);
+        continue;
+      }
+      if (name === 'ping' || name === 'autoplay') {
+        element.removeAttribute(attr.name);
+        continue;
+      }
+      if (name === 'srcset') {
+        element.setAttribute(attr.name, rewriteSrcset(attr.value, dirUrl));
+        continue;
+      }
+      if (name === 'style') {
+        if (options.beautify) element.removeAttribute(attr.name);
+        else element.setAttribute(attr.name, rewriteCssUrls(attr.value, dirUrl));
+        continue;
+      }
+      if (urlAttrs.has(name)) {
+        const resolved = resolvePreviewUrl(attr.value, dirUrl);
+        if (!resolved) element.removeAttribute(attr.name);
+        else element.setAttribute(attr.name, resolved);
+      }
+    }
+  }
+
+  doc.querySelectorAll('style').forEach((node) => {
+    node.textContent = rewriteCssUrls(node.textContent, dirUrl);
+  });
+
+  // 把 head 里的样式挪进 body，否则只取 body.innerHTML 会丢掉它们。
+  for (const node of Array.from(doc.head ? doc.head.children : [])) {
+    const tag = node.tagName.toLowerCase();
+    const isStylesheet = tag === 'link' && /(^|\s)stylesheet(\s|$)/i.test(node.getAttribute('rel') || '');
+    if (tag === 'style' || isStylesheet) doc.body.prepend(node);
+  }
+
+  return doc.body ? doc.body.innerHTML : '';
+}
+
+function fileUrlToPath(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'file:') return null;
+    let pathname = decodeURIComponent(parsed.pathname);
+    if (/^\/[A-Za-z]:/.test(pathname)) pathname = pathname.slice(1);
+    return pathname.replace(/\//g, '\\');
+  } catch {
+    return null;
+  }
+}
+
+function onPreviewClick(event) {
+  const path = event.composedPath ? event.composedPath() : [];
+  const anchor = path.find((node) => node && node.tagName && node.tagName.toLowerCase() === 'a');
+  if (!anchor) return;
+  const href = anchor.getAttribute('href') || '';
+  if (!href) return;
+  event.preventDefault();
+  if (/^(https?:|mailto:)/i.test(href)) {
+    api.openExternal(href).catch((error) => toast(errorMessage(error), 'error', 5000));
+    return;
+  }
+  if (/^file:/i.test(href)) {
+    const localPath = fileUrlToPath(href);
+    if (localPath && kindOf(localPath)) openFile(localPath, { silent: true });
+  }
+}
+
+function renderHtmlPreview(container, raw, dirUrl, options = {}) {
+  const html = preparePreviewHtml(raw, dirUrl, options);
+  const shadow = container.attachShadow({ mode: 'open' });
+  const style = document.createElement('style');
+  style.textContent = PREVIEW_BASE_CSS + (options.docx ? DOCX_PREVIEW_CSS : '');
+  shadow.appendChild(style);
+
+  const content = document.createElement('div');
+  content.className = `preview-content${options.beautify ? ' beautified' : ''}`;
+  content.innerHTML = html;
+  shadow.appendChild(content);
+  content.addEventListener('click', onPreviewClick);
+}
+
+function renderSourceView(container, text) {
+  const pre = document.createElement('pre');
+  pre.className = 'source-view';
+  pre.textContent = String(text || '');
+  container.appendChild(pre);
+}
+
+function renderNotice(container, text, kind = '') {
+  const note = document.createElement('div');
+  note.className = `preview-note${kind ? ` ${kind}` : ''}`;
+  note.textContent = text;
+  container.appendChild(note);
+}
+
+function buildJsonHighlight(text) {
+  const fragment = document.createDocumentFragment();
+  const pattern = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([{}[\],:])/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = pattern.exec(text))) {
+    if (match.index > lastIndex) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+    let className = 'json-punct';
+    if (match[1]) className = match[2] ? 'json-key' : 'json-string';
+    else if (match[3]) className = match[3] === 'null' ? 'json-null' : `json-${match[3]}`;
+    else if (match[4]) className = 'json-number';
+    const span = document.createElement('span');
+    span.className = className;
+    span.textContent = match[0];
+    fragment.appendChild(span);
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+  return fragment;
+}
+
+function renderJsonView(container, text) {
+  const source = String(text || '');
+  let pretty = source;
+  let parseError = null;
+  try {
+    pretty = JSON.stringify(JSON.parse(source), null, 2);
+  } catch (error) {
+    parseError = error;
+  }
+  if (parseError) renderNotice(container, `JSON 解析失败：${parseError.message}`, 'error');
+  const pre = document.createElement('pre');
+  pre.className = 'source-view json-view';
+  pre.appendChild(buildJsonHighlight(pretty));
+  container.appendChild(pre);
+}
+
+async function renderPdfPreview(container, tab, token) {
+  renderNotice(container, '正在打开 PDF…', 'loading');
+  try {
+    if (!tab.pdfBytes) {
+      tab.pdfBytes = await api.readBinary(tab.path);
+    }
+    if (token !== state.docLoadToken) return;
+
+    const pdfjs = await ensurePdfJs();
+    if (token !== state.docLoadToken) return;
+
+    const task = pdfjs.getDocument({
+      data: tab.pdfBytes,
+      cMapUrl: new URL('./vendor/pdfjs/cmaps/', location.href).href,
+      cMapPacked: true,
+      standardFontDataUrl: new URL('./vendor/pdfjs/standard_fonts/', location.href).href,
+      wasmUrl: new URL('./vendor/pdfjs/wasm/', location.href).href,
+      isEvalSupported: false,
+      enableXfa: false
+    });
+    const doc = await task.promise;
+    if (token !== state.docLoadToken) {
+      task.destroy().catch(() => {});
+      return;
+    }
+
+    container.replaceChildren();
+    const total = Math.min(doc.numPages, MAX_PDF_PAGES);
+    for (let index = 1; index <= total; index += 1) {
+      if (token !== state.docLoadToken) {
+        task.destroy().catch(() => {});
+        return;
+      }
+      const page = await doc.getPage(index);
+      const hostWidth = Math.max(320, Math.min(container.clientWidth || 900, 1180));
+      const baseViewport = page.getViewport({ scale: 1 });
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const viewport = page.getViewport({ scale: (hostWidth / baseViewport.width) * dpr });
+      const canvas = document.createElement('canvas');
+      canvas.className = 'pdf-page';
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      canvas.style.width = `${Math.floor(viewport.width / dpr)}px`;
+      canvas.style.height = `${Math.floor(viewport.height / dpr)}px`;
+      container.appendChild(canvas);
+      await page.render({ canvas, viewport }).promise;
+    }
+
+    if (doc.numPages > MAX_PDF_PAGES) {
+      renderNotice(container, `文档共 ${doc.numPages} 页，仅显示前 ${MAX_PDF_PAGES} 页`, 'loading');
+    }
+    task.destroy().catch(() => {});
+  } catch (error) {
+    if (token !== state.docLoadToken) return;
+    container.replaceChildren();
+    renderNotice(container, `无法预览 PDF：${errorMessage(error)}`, 'error');
+  }
+}
+
+function createPreviewTools(tab) {
+  if (tab.kind !== 'html') return null;
+  const tools = document.createElement('div');
+  tools.className = 'preview-tools';
+  const modes = [
+    ['preview', '预览', '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4c3.6 0 6.3 2.6 7.5 5.3.2.4.2.9 0 1.3C16.3 13.4 13.6 16 10 16s-6.3-2.6-7.5-5.3a1.5 1.5 0 0 1 0-1.3C3.7 6.6 6.4 4 10 4Zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/></svg>'],
+    ['source', '源码', '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5 3 10l4 5M13 5l4 5-4 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>']
+  ];
+  for (const [mode, label, icon] of modes) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'preview-tool';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', String((tab.previewMode || 'preview') === mode));
+    button.innerHTML = icon;
+    button.addEventListener('click', () => {
+      tab.previewMode = mode;
+      renderPreview(tab, state.docLoadToken);
+    });
+    tools.appendChild(button);
+  }
+
+  if ((tab.previewMode || 'preview') !== 'source') {
+    const beautify = document.createElement('button');
+    beautify.type = 'button';
+    beautify.className = 'preview-tool preview-tool-text';
+    beautify.title = tab.previewBeautify ? '恢复网页原始样式' : '一键美化排版';
+    beautify.setAttribute('aria-label', beautify.title);
+    beautify.setAttribute('aria-pressed', String(Boolean(tab.previewBeautify)));
+    beautify.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5l1.2 3.3L14.5 7l-3.3 1.2L10 11.5 8.8 8.2 5.5 7l3.3-1.2L10 2.5Zm5 8l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z"/></svg><span>美化</span>';
+    beautify.addEventListener('click', () => {
+      tab.previewBeautify = !tab.previewBeautify;
+      renderPreview(tab, state.docLoadToken);
+    });
+    tools.appendChild(beautify);
+  }
+  return tools;
+}
+
+async function renderPreview(tab, token) {
+  const host = els.previewHost;
+  if (!host) return;
+  host.replaceChildren();
+  host.scrollTop = 0;
+
+  const tools = createPreviewTools(tab);
+  if (tools) host.appendChild(tools);
+
+  const container = document.createElement('div');
+  container.className = `preview-doc preview-${tab.kind}`;
+  host.appendChild(container);
+
+  if (tab.kind === 'html') {
+    const content = tab.content || '';
+    if (tab.previewMode === 'source' || content.length > MAX_PREVIEW_TEXT) {
+      if (content.length > MAX_PREVIEW_TEXT && tab.previewMode !== 'source') {
+        renderNotice(container, '文件超过 8 MB，已切换为源码视图', 'loading');
+      }
+      renderSourceView(container, content);
+      return;
+    }
+    renderHtmlPreview(container, content, tab.dirUrl, { beautify: Boolean(tab.previewBeautify) });
+    return;
+  }
+
+  if (tab.kind === 'json') {
+    renderJsonView(container, tab.content || '');
+    return;
+  }
+
+  if (tab.kind === 'docx') {
+    if (!tab.docHtml) {
+      renderNotice(container, '正在转换 Word 文档…', 'loading');
+      try {
+        const result = await api.convertDocx(tab.path);
+        if (token !== state.docLoadToken) return;
+        tab.docHtml = (result && result.html) || '';
+        container.replaceChildren();
+      } catch (error) {
+        if (token !== state.docLoadToken) return;
+        container.replaceChildren();
+        renderNotice(container, `无法预览 Word 文档：${errorMessage(error)}`, 'error');
+        return;
+      }
+    }
+    renderHtmlPreview(container, tab.docHtml, tab.dirUrl, { docx: true });
+    return;
+  }
+
+  if (tab.kind === 'pdf') {
+    await renderPdfPreview(container, tab, token);
+  }
+}
+
 /* ------------------------------ 文档打开与标签页 ------------------------------ */
 
 async function openFile(filePath, options = {}) {
@@ -854,10 +1343,14 @@ async function openFile(filePath, options = {}) {
       return;
     }
 
+    const kind = data.kind || kindOf(data.name || data.path) || 'markdown';
     const tab = {
       id: crypto.randomUUID(),
       path: data.path,
       name: data.name || baseName(data.path),
+      kind,
+      previewMode: 'preview',
+      previewBeautify: false,
       content: data.content || '',
       savedContent: data.content || '',
       eol: data.eol || '\n',
@@ -991,6 +1484,7 @@ function renderTabs() {
 function showWelcome() {
   state.docLoadToken += 1;
   els.editorShell.classList.remove('has-doc');
+  updateEditorMode(null);
   if (els.contentResizer) els.contentResizer.classList.add('hidden');
   if (els.outlineResizer) els.outlineResizer.classList.add('hidden');
   updateBackTopState();
@@ -1002,7 +1496,7 @@ function showWelcome() {
 
 function updateSaveButton() {
   const tab = activeTab();
-  els.btnSave.disabled = !tab || !tab.dirty;
+  els.btnSave.disabled = !tab || isPreviewTab(tab) || !tab.dirty;
 }
 
 function updateStatus(message) {
@@ -1023,6 +1517,14 @@ function updateStatus(message) {
 
   els.statusLeft.textContent = tab.path || tab.name;
   els.statusLeft.title = tab.path || tab.name;
+
+  if (isPreviewTab(tab)) {
+    els.statusCount.textContent = '只读';
+    els.statusSave.textContent = '';
+    els.statusSave.className = 'status-item';
+    return;
+  }
+
   const text = tab.content || '';
   const chars = Array.from(text).length;
   const lines = text ? text.split(/\r?\n/).length : 0;
@@ -1057,6 +1559,7 @@ const ICONS = {
   folder: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 4.5A1.5 1.5 0 0 1 4 3h4l1.5 2H16a1.5 1.5 0 0 1 1.5 1.5V15A1.5 1.5 0 0 1 16 16.5H4A1.5 1.5 0 0 1 2.5 15V4.5Z"/></svg>',
   markdown: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2h6l4 4v12H5V2Zm6 1.5V7h3.5L11 3.5ZM7 10h6v1.2H7V10Zm0 3h6v1.2H7V13Z"/></svg>',
   text: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2h10v16H5V2Zm2 4h6v1.2H7V6Zm0 3h6v1.2H7V9Zm0 3h4v1.2H7V12Z"/></svg>',
+  code: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5.5 3 10l4.5 4.5M12.5 5.5 17 10l-4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   image: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3V4Zm2 2v8h10V6H5Zm1.8 6.8 2.4-2.9 1.5 1.7 1.6-2.1 2.2 3.3H6.8Z"/></svg>',
   file: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2h6l4 4v12H5V2Zm6 1.5V7h3.5L11 3.5Z"/></svg>'
 };
@@ -1184,17 +1687,17 @@ function makeTreeRow(entry, depth) {
   name.textContent = entry.name;
   row.appendChild(name);
 
-  if (!entry.isDir && !isMarkdown(entry)) row.classList.add('unsupported');
+  if (!entry.isDir && !isOpenable(entry)) row.classList.add('unsupported');
 
   row.addEventListener('click', () => {
     if (entry.isDir) {
       toggleDir(entry);
-    } else if (isMarkdown(entry)) {
+    } else if (isOpenable(entry)) {
       openFile(entry.path);
     } else if (isImage(entry)) {
       toast('图片文件请在资源管理器中查看，或直接把图片拖进 Markdown 文档。');
     } else {
-      toast('当前只支持打开 Markdown / 文本文件。');
+      toast('暂不支持打开这种文件');
     }
   });
 
@@ -1209,16 +1712,22 @@ function makeTreeRow(entry, depth) {
 
 function iconFor(entry) {
   if (entry.isDir) return ICONS.folder;
+  const kind = kindOf(entry);
+  if (kind === 'markdown') return ICONS.markdown;
+  if (kind === 'html' || kind === 'json') return ICONS.code;
+  if (kind === 'docx') return ICONS.text;
+  if (kind === 'pdf') return ICONS.file;
   const ext = entry.ext || extOf(entry.name);
-  if (MD_EXT.has(ext)) return ICONS.markdown;
   if (IMAGE_EXT.has(ext)) return ICONS.image;
   return ICONS.file;
 }
 
 function iconClassFor(entry) {
   if (entry.isDir) return '';
+  const kind = kindOf(entry);
+  if (kind === 'markdown') return 'md';
+  if (kind === 'html' || kind === 'json') return 'code';
   const ext = entry.ext || extOf(entry.name);
-  if (MD_EXT.has(ext)) return 'md';
   if (IMAGE_EXT.has(ext)) return 'image';
   return '';
 }
@@ -1495,6 +2004,8 @@ async function newFile() {
         id: crypto.randomUUID(),
         path: result.path,
         name: result.name || baseName(result.path),
+        kind: 'markdown',
+        previewMode: 'preview',
         content: result.content || '',
         savedContent: result.content || '',
         eol: result.eol || '\n',
@@ -1517,6 +2028,10 @@ async function saveAsActive() {
   const tab = activeTab();
   if (!tab) {
     toast('当前没有打开的文件');
+    return;
+  }
+  if (isPreviewTab(tab)) {
+    toast('该格式为只读预览，无法保存');
     return;
   }
   syncActiveContent();
@@ -1688,7 +2203,7 @@ function updateContentResizer() {
   if (!handle) return;
   const tab = activeTab();
   const ir = document.querySelector('.vditor-ir') || document.querySelector('.vditor-wysiwyg');
-  if (!tab || !ir || !els.editorShell.classList.contains('has-doc')) {
+  if (!tab || isPreviewTab(tab) || !ir || !els.editorShell.classList.contains('has-doc')) {
     handle.classList.add('hidden');
     return;
   }
@@ -1881,6 +2396,7 @@ function onFindResult(result) {
 /* ------------------------------ AI 助手桥接 ------------------------------ */
 
 function aiGetDocument() {
+  if (isPreviewTab(activeTab())) return '';
   try {
     return state.vditor ? state.vditor.getValue() : '';
   } catch {
@@ -2115,6 +2631,10 @@ async function exportActive(kind) {
     toast('请先打开一个文件');
     return;
   }
+  if (isPreviewTab(tab)) {
+    toast('该格式为只读预览，不支持导出');
+    return;
+  }
 
   syncActiveContent();
   const payload = await buildExportPayload(tab);
@@ -2179,10 +2699,8 @@ function openExportSettings() {
   modal.className = 'modal wide';
   modal.innerHTML = `
     <h2>导出设置</h2>
-    <p>设置会应用到 Word、PDF 和 HTML，并记住你的选择。</p>
     <div class="modal-form">
       <div class="form-block">
-        <div class="form-label">排版风格</div>
         <div class="segmented" data-role="style">
           <button type="button" data-style="general">通用文档</button>
           <button type="button" data-style="formal">正式文档</button>
@@ -2190,15 +2708,15 @@ function openExportSettings() {
         <div class="form-hint" data-role="style-hint"></div>
       </div>
       <label class="form-row">
-        <span class="form-copy"><span class="form-label">页眉</span><span class="form-hint">在每页顶部显示文档标题</span></span>
+        <span class="form-copy"><span class="form-label">页眉</span><span class="form-hint">每页顶部显示文档标题</span></span>
         <span class="switch"><input type="checkbox" data-setting="header"><span></span></span>
       </label>
       <label class="form-row">
-        <span class="form-copy"><span class="form-label">页脚</span><span class="form-hint">在每页底部显示“第 X 页 / 共 Y 页”</span></span>
+        <span class="form-copy"><span class="form-label">页脚</span><span class="form-hint">每页底部显示“第 X 页 / 共 Y 页”</span></span>
         <span class="switch"><input type="checkbox" data-setting="footer"><span></span></span>
       </label>
       <label class="form-row">
-        <span class="form-copy"><span class="form-label">封面</span><span class="form-hint">生成独立封面页，标题使用文档一级标题</span></span>
+        <span class="form-copy"><span class="form-label">封面</span><span class="form-hint">独立封面页，标题使用文档一级标题</span></span>
         <span class="switch"><input type="checkbox" data-setting="cover"><span></span></span>
       </label>
       <div class="form-grid" data-role="cover-fields">
@@ -2209,7 +2727,6 @@ function openExportSettings() {
         <span class="form-copy"><span class="form-label">目录</span><span class="form-hint">Word 目录带页码并由 Word 更新；PDF 目录可点击跳转，不含页码</span></span>
         <span class="switch"><input type="checkbox" data-setting="toc"><span></span></span>
       </label>
-      <div class="form-hint form-note">提示：启用封面时，PDF 的封面页也会显示页眉/页脚；Word 会自动跳过封面页。</div>
     </div>
     <div class="modal-actions">
       <button class="btn" type="button" data-action="cancel">取消</button>
@@ -2234,15 +2751,15 @@ function openExportSettings() {
       button.classList.toggle('active', (button.dataset.style === 'formal') === formal);
     });
     styleHint.textContent = formal
-      ? '正文首行缩进 2 字符，适合报告、论文和正式材料。'
-      : '不缩进，用段间距区分段落，适合大多数 Markdown 文档。';
+      ? '首行缩进 2 字符，适合报告和正式材料。'
+      : '不缩进，段间距分段，适合大多数文档。';
   };
 
   const updateCoverFields = () => {
-    const disabled = !coverInput.checked;
-    coverFields.classList.toggle('disabled', disabled);
-    subtitleInput.disabled = disabled;
-    authorInput.disabled = disabled;
+    const hidden = !coverInput.checked;
+    coverFields.hidden = hidden;
+    subtitleInput.disabled = hidden;
+    authorInput.disabled = hidden;
   };
 
   headerInput.checked = Boolean(state.exportSettings.header);
@@ -2319,6 +2836,16 @@ async function refreshAssociationEntry() {
   }
 }
 
+function openSettingsMenu() {
+  const button = document.getElementById('btn-settings');
+  if (!button) return;
+  const rect = button.getBoundingClientRect();
+  showContextMenu(rect.left, rect.bottom + 6, [
+    { label: '默认打开方式…', action: openDefaultAppDialog },
+    { label: '导出设置…', action: openExportSettings }
+  ]);
+}
+
 async function openDefaultAppDialog() {
   if (state.platform !== 'win32') {
     toast('文件关联设置目前只支持 Windows 版本', 'info', 5000);
@@ -2342,7 +2869,7 @@ function showAssociationModal(initialStatus) {
   modal.className = 'modal wide';
   modal.innerHTML = `
     <h2>双击 .md 文件时用 ReadMD 打开</h2>
-    <p>Windows 不允许软件自己修改默认程序。点击“去设置”后，系统会弹出“打开方式”窗口：请选择 <strong>ReadMD</strong>，并勾选“始终使用此应用打开 .md 文件”。</p>
+    <p>Windows 不允许软件自行修改默认程序。点“去设置”后，在系统窗口里选择 <strong>ReadMD</strong>，勾选“始终使用此应用打开 .md 文件”。</p>
     <div class="assoc-status">
       <div class="assoc-row"><span>当前默认程序</span><strong data-role="handler">读取中…</strong></div>
       <div class="assoc-row"><span>ReadMD 注册状态</span><strong data-role="registered">读取中…</strong></div>
@@ -2616,7 +3143,7 @@ function isImageFile(file) {
 
 function triggerImagePicker() {
   const tab = activeTab();
-  if (!tab) {
+  if (!tab || isPreviewTab(tab)) {
     toast('请先打开一个 Markdown 文件');
     return;
   }
@@ -2885,6 +3412,7 @@ function bindStaticEvents() {
   }
 
   onClick('btn-theme', toggleTheme);
+  onClick('btn-settings', openSettingsMenu);
   onClick('btn-sidebar', toggleSidebar);
   onClick('btn-find', openFind);
   onClick('btn-new-file', newFile);
@@ -2958,7 +3486,7 @@ function bindStaticEvents() {
       case 'export-settings': openExportSettings(); break;
       case 'export-batch': batchExportFolder(); break;
       case 'default-app': openDefaultAppDialog(); break;
-      case 'toggle-ai': window.readmdAI?.toggle(); break;
+      case 'toggle-ai': if (!isPreviewTab(activeTab())) window.readmdAI?.toggle(); break;
       case 'ai-settings': window.readmdAI?.openSettings(); break;
       case 'toggle-sidebar': toggleSidebar(); break;
       case 'toggle-theme': toggleTheme(); break;

@@ -32,7 +32,7 @@
   <a href="#参与贡献">参与贡献</a>
 </p>
 
-> **项目状态**：`v0.4.0`，Windows 优先，功能可用但仍在快速迭代。欢迎提交 Issue 和 Pull Request。
+> **项目状态**：`v0.5.0`，Windows 优先，功能可用但仍在快速迭代。欢迎提交 Issue 和 Pull Request。
 >
 > **设计原则**：文件留在本地、格式保持开放、编辑器内核复用成熟项目、界面保持轻量。
 >
@@ -90,6 +90,15 @@
 - 当前文档内查找，显示匹配数量
 - 正文宽度、侧边栏宽度、大纲面板宽度均可拖拽调整；宽窗口/全屏下正文自动居中
 
+### 其他文档预览（只读）
+
+- **HTML / HTM**：静态预览 + 源码切换；不执行脚本、不加载框架和表单，外链交给系统浏览器
+- **JSON**：格式化视图，键名、字符串、数字、布尔值分色；非法 JSON 显示原文和错误位置
+- **PDF**：内置 pdf.js 逐页渲染，按窗口宽度缩放；超过 200 页只显示前 200 页
+- **DOCX**：用 mammoth 转成语义化 HTML 预览；旧版 `.doc` 不支持，请先另存为 `.docx`
+- 以上格式均为只读，不参与自动保存；Markdown / 文本仍然可以正常编辑
+- 文件树、打开对话框、最近文件和系统“打开方式”传参都识别这些类型
+
 ### 文件与工作流
 
 - 打开文件夹，左侧懒加载文件树
@@ -99,7 +108,7 @@
 - 删除文件移到系统回收站，可恢复
 - 最近打开的文件夹和文件
 - 双击 `.md` 文件直接用 ReadMD 打开；可在应用内设为默认打开方式（Windows 会要求用户确认），已运行时复用窗口并新开标签页
-- 一次选择多个 Markdown 文件时，全部作为标签页打开
+- 一次选择多个文档时，全部作为标签页打开
 - 记住窗口大小、侧边栏宽度、主题和上次打开的文件
 - 点击编辑器工具栏图片按钮、拖拽或粘贴图片，自动保存到文档旁的 `assets/` 文件夹
 - 相对路径图片正确显示
@@ -162,7 +171,9 @@
 
 ### 方式一：下载发行版（Windows）
 
-在仓库的 **Releases** 页面下载最新的 `ReadMD-*-portable.exe`，双击运行即可。
+日常使用推荐下载 **安装版** `ReadMD-*-setup.exe`：安装一次，之后启动不需要解压，打开文档更快。
+
+需要 U 盘或免安装时使用 **便携版** `ReadMD-*-portable.exe`：不需要安装，但每次启动都要把约 105 MB 的程序解压到临时目录，首次打开可能等待 20–60 秒。
 
 > 如果没有找到 Release，请使用下面的源码运行方式，或自行打包。
 >
@@ -185,16 +196,18 @@ npm start
 
 `npm install` 会自动执行 `postinstall`，把 Vditor 的离线资源复制到 `renderer/vendor/vditor`。
 
-### 打包 Windows 便携版
+### 打包 Windows 安装版 / 便携版
 
 ```bash
-npm run dist
+npm run dist:setup   # 安装版（推荐日常使用）
+npm run dist         # 便携版（免安装，启动需解压）
 ```
 
 产物：
 
 ```text
-dist/ReadMD-0.4.0-portable.exe
+dist/ReadMD-0.5.0-setup.exe
+dist/ReadMD-0.5.0-portable.exe
 ```
 
 如果只想生成未打包的目录（便于调试）：
@@ -367,9 +380,10 @@ ReadMD/
 ### 常用命令
 
 ```bash
-npm install          # 安装依赖并复制 Vditor 离线资源
+npm install          # 安装依赖并复制 Vditor / pdf.js 离线资源
 npm start            # 开发运行
 npm run smoke        # 端到端冒烟测试（会启动真实 Electron 窗口）
+npm run dist:setup   # 打包 Windows 安装版（推荐）
 npm run dist         # 打包 Windows 便携版
 npm run dist:dir     # 只生成未打包目录，便于调试
 ```
@@ -453,7 +467,10 @@ npm run dist:dir     # 只生成未打包目录，便于调试
 - 程序未签名，Windows SmartScreen 可能提示“未知发布者”。
 - 保存时会对 Markdown 做轻度规范化，可能产生 diff。
 - 没有全文件夹搜索/替换、版本历史、云同步、多人协作和移动端。
-- 只支持 Markdown / 文本文件；图片在文件树中不会内嵌预览。
+- 只读预览支持 HTML / JSON / PDF / DOCX；图片内嵌预览、旧版 `.doc`、RTF / Excel 暂不支持。
+- HTML 预览不执行脚本，依赖 JavaScript 渲染的页面会显示为静态内容；HTML / JSON 不能直接编辑。
+- PDF 预览用 canvas 渲染，`Ctrl+F` 不能搜索 PDF 文字；扫描件也不做 OCR。
+- DOCX 预览是语义化转换，复杂版式、页眉页脚、域和 OMML 公式不会完全还原；需要精确版式时请用 Word 打开。
 - PDF 使用 Chromium 打印引擎，适合常规文档；PDF 目录是可点击的标题清单，但**不显示页码**（Chromium 不提供目录页码计算）。Word 目录带页码，由 Word 打开时更新。
 - 启用封面且同时开启页眉/页脚时，PDF 的封面页也会显示页眉/页脚；Word 会自动跳过封面页。
 - 批量导出单次最多处理 300 个 Markdown 文件，按顺序生成；PDF 批量导出会比 Word/HTML 慢。输出文件重名时会自动加 `(1)`、`(2)` 后缀，不覆盖已有文件。
@@ -467,7 +484,7 @@ npm run dist:dir     # 只生成未打包目录，便于调试
 - AI 上下文按模型配置里的“上下文上限”截断（默认 6 万字符）；暂未实现文件夹级 RAG/向量检索。
 - “图片识别 / 工具调用 / 流式输出”由用户在设置里勾选；Qwen 预设默认关闭流式，以避免 tools 与 stream 不能同时使用；如果你确认服务商支持两者同时使用，可以手动勾选。Ollama 的旧版本可能不支持工具或图片，需要按实际模型勾选。
 - AI 内容会发送到用户选择的服务商，费用由用户的 API Key 承担；默认配置只预填了接口地址和模型名，**不包含 API Key**。
-- Electron 便携版约 94 MB，解压后约 410 MB（AI SDK 与文档解析依赖会占用较多空间）。
+- 安装版约 120 MB，便携版约 105 MB；便携版每次启动要解压到临时目录，首次打开明显更慢（约 20–60 秒），日常使用建议安装版。
 - 没有自动更新机制；升级需要下载新版本。
 
 ---
@@ -573,10 +590,12 @@ MarkText 是完整成品，直接安装就能获得更全的功能；Fork 整个
 | 项目 | 许可证 | 用途 |
 | --- | --- | --- |
 | [Vditor](https://github.com/Vanessa219/vditor) | MIT | Markdown 编辑器内核 |
+| [mammoth.js](https://github.com/mwilliamson/mammoth.js) | BSD-2-Clause | DOCX 只读预览 |
+| [pdf.js](https://github.com/mozilla/pdf.js) | Apache-2.0 | PDF 只读预览 |
 | [Electron](https://www.electronjs.org/) | MIT | 桌面运行时 |
 | [electron-builder](https://www.electron.build/) | MIT | Windows 打包 |
 
-Vditor 的许可证文件会在 `npm install` 后复制到 `renderer/vendor/vditor/LICENSE`，并随构建产物一起分发。
+Vditor 的许可证文件会在 `npm install` 后复制到 `renderer/vendor/vditor/LICENSE`；pdf.js 与 mammoth 的完整许可证文本随应用分发在 `licenses/` 目录。汇总说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ---
 

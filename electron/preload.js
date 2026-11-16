@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('readmd', {
 
   readDir: (dirPath) => ipcRenderer.invoke('fs:read-dir', dirPath),
   readFile: (filePath) => ipcRenderer.invoke('fs:read-file', filePath),
+  readBinary: (filePath) => ipcRenderer.invoke('fs:read-binary', filePath),
+  convertDocx: (filePath) => ipcRenderer.invoke('document:docx-html', filePath),
   writeFile: (filePath, content, eol) => ipcRenderer.invoke('fs:write-file', filePath, content, eol),
   saveAs: (content, defaultName, currentPath, eol) =>
     ipcRenderer.invoke('fs:save-as', content, defaultName, currentPath, eol),

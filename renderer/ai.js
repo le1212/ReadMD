@@ -239,7 +239,6 @@
           </span>
           <div class="ai-heading-copy">
             <span class="ai-title">AI 助手</span>
-            <span class="ai-subtitle">阅读 · 识图 · 改文档</span>
           </div>
         </div>
         <div class="ai-header-actions">
@@ -300,7 +299,7 @@
             </span>
             <div>
               <h2>AI 设置</h2>
-              <p>配置你自己的模型。API Key 只保存在本机，并使用系统加密。</p>
+              <p>API Key 只保存在本机，并使用系统加密。</p>
             </div>
           </div>
           <button class="ai-icon-btn" data-action="close-settings" title="关闭">
@@ -310,23 +309,19 @@
         <div class="ai-settings-body">
           <aside class="ai-config-list">
             <div class="ai-config-list-head">
-              <span>模型</span>
               <button class="ai-add-btn" data-action="new-config">+ 添加</button>
             </div>
             <div data-role="config-items"></div>
             <div class="ai-config-list-foot">
-              <p class="ai-config-note">对话内容会发送到你选择的模型服务商；选择本地模型时不会离开电脑。</p>
+              <p class="ai-config-note">对话会发送到所选模型服务商；本地模型不会离开电脑。</p>
               <button class="ai-link-btn" data-action="restore-default">恢复默认配置</button>
             </div>
           </aside>
           <form class="ai-config-form" data-role="config-form">
             <div class="ai-form-body">
             <section class="ai-form-section">
-              <div class="ai-form-section-head">连接</div>
               <div class="ai-form-row">
-                <label>快速填充</label>
                 <select data-role="preset"></select>
-                <span class="ai-form-hint">选择常见服务商会自动填好接口地址和模型名。</span>
               </div>
               <div class="ai-form-grid">
                 <div class="ai-form-row">
@@ -361,34 +356,28 @@
               </div>
             </section>
             <section class="ai-form-section">
-              <div class="ai-form-section-head">能力</div>
               <div class="ai-toggle-list">
                 <label class="ai-toggle-row">
                   <span class="ai-toggle-copy">
                     <span class="ai-toggle-title">图片识别</span>
-                    <span class="ai-toggle-hint">允许粘贴或上传图片让模型理解</span>
                   </span>
                   <span class="switch"><input type="checkbox" data-field="supportsVision"><span></span></span>
                 </label>
                 <label class="ai-toggle-row">
                   <span class="ai-toggle-copy">
                     <span class="ai-toggle-title">工具调用</span>
-                    <span class="ai-toggle-hint">允许搜索文件、读取文档并生成修改建议</span>
                   </span>
                   <span class="switch"><input type="checkbox" data-field="supportsTools"><span></span></span>
                 </label>
                 <label class="ai-toggle-row">
                   <span class="ai-toggle-copy">
                     <span class="ai-toggle-title">流式输出</span>
-                    <span class="ai-toggle-hint">回答逐字显示，速度感更好</span>
                   </span>
                   <span class="switch"><input type="checkbox" data-field="supportsStreaming"><span></span></span>
                 </label>
               </div>
-              <span class="ai-form-hint">不确定时保持默认。关闭“工具调用”后，AI 只能用文本返回修改建议。</span>
             </section>
             <section class="ai-form-section">
-              <div class="ai-form-section-head">上下文</div>
               <div class="ai-form-row">
                 <label>上下文上限</label>
                 <input data-field="maxContextChars" type="number" min="4000" max="300000" step="1000">

@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob: https:; font-src 'self' file: data:; media-src 'self' file: data: blob:; connect-src 'self' file: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; worker-src 'self' file: blob:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob: https:; font-src 'self' file: data:; media-src 'self' file: data: blob:; connect-src 'self' file: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ReadMD</title>
   <link rel="stylesheet" href="./vendor/vditor/dist/index.css">
@@ -15,7 +15,6 @@
         <div class="brand-mark">R</div>
         <div class="brand-copy">
           <span class="brand-name">ReadMD</span>
-          <span class="brand-sub">本地 Markdown 工作台</span>
         </div>
       </div>
 
@@ -37,7 +36,6 @@
         </div>
       </div>
 
-      <div class="section-label">文件</div>
       <div id="file-tree" class="file-tree" role="tree"></div>
       <div id="sidebar-empty" class="sidebar-empty">
         <div class="empty-icon">
@@ -45,11 +43,6 @@
         </div>
         <p>还没有打开文件夹</p>
         <button id="btn-sidebar-open" class="btn small">选择文件夹</button>
-      </div>
-
-      <div class="sidebar-footer">
-        <span>本地文件</span>
-        <span>UTF-8</span>
       </div>
     </aside>
 
@@ -73,6 +66,13 @@
           <span>查找当前文档</span>
           <kbd>Ctrl F</kbd>
         </button>
+        <button id="btn-settings" class="icon-btn" title="设置：打开方式、导出" aria-label="设置">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M3 6.5h6.2m3.6 0H17M3 13.5h2.2m3.6 0H17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="11" cy="6.5" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+            <circle cx="7" cy="13.5" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          </svg>
+        </button>
         <button id="btn-theme" class="icon-btn" title="切换深色模式 (Ctrl+Shift+D)" aria-label="切换主题">
           <svg class="icon-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M12.9 2.2a7.8 7.8 0 1 0 4.9 11.1A6.6 6.6 0 0 1 12.9 2.2Z"/></svg>
           <svg class="icon-sun" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5.8a4.2 4.2 0 1 1 0 8.4 4.2 4.2 0 0 1 0-8.4ZM10 1a1 1 0 0 1 1 1v1.2a1 1 0 1 1-2 0V2a1 1 0 0 1 1-1Zm0 14.8a1 1 0 0 1 1 1V18a1 1 0 1 1-2 0v-1.2a1 1 0 0 1 1-1ZM1 10a1 1 0 0 1 1-1h1.2a1 1 0 1 1 0 2H2a1 1 0 0 1-1-1Zm14.8 0a1 1 0 0 1 1-1H18a1 1 0 1 1 0 2h-1.2a1 1 0 0 1-1-1ZM3.6 3.6a1 1 0 0 1 1.4 0l.9.9A1 1 0 0 1 4.5 5.9l-.9-.9a1 1 0 0 1 0-1.4Zm10.5 10.5a1 1 0 0 1 1.4 0l.9.9a1 1 0 0 1-1.4 1.4l-.9-.9a1 1 0 0 1 0-1.4Zm1.4-10.5a1 1 0 0 1 0 1.4l-.9.9a1 1 0 0 1-1.4-1.4l.9-.9a1 1 0 0 1 1.4 0ZM5.9 14.1a1 1 0 0 1 0 1.4l-.9.9a1 1 0 0 1-1.4-1.4l.9-.9a1 1 0 0 1 1.4 0Z"/></svg>
@@ -89,7 +89,7 @@
             <div class="welcome-card">
               <div class="welcome-logo">R</div>
               <h1>ReadMD</h1>
-              <p class="welcome-sub">本地 Markdown 阅读与编辑，文件始终在你自己的磁盘上。打开一个文件夹，或者直接打开一份文档开始。</p>
+              <p class="welcome-sub">本地 Markdown 阅读与编辑，文件始终在你自己的磁盘上。</p>
               <div class="welcome-actions">
                 <button id="welcome-open-folder" class="btn primary big">打开文件夹</button>
                 <button id="welcome-open-file" class="btn big">打开文件</button>
@@ -104,11 +104,11 @@
                   <ul id="recent-files" class="recent-list"><li class="recent-empty">暂无记录</li></ul>
                 </section>
               </div>
-              <p class="welcome-hint">Ctrl+S 保存 · Ctrl+F 查找 · Ctrl+Shift+D 深色模式</p>
               <button id="welcome-default-app" class="welcome-link" type="button" hidden>双击 .md 文件时用 ReadMD 打开 →</button>
             </div>
           </div>
           <div id="vditor" class="vditor-host"></div>
+          <div id="preview-host" class="preview-host" hidden></div>
           <div id="content-resizer" class="content-resizer hidden" title="拖动调整正文宽度，双击恢复默认"></div>
           <div id="outline-resizer" class="outline-resizer hidden" title="拖动调整大纲宽度，双击恢复默认"></div>
           <button id="btn-back-top" class="back-top" type="button" title="回到顶部" aria-label="回到顶部" aria-hidden="true" tabindex="-1">

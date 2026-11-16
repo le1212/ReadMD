@@ -49,6 +49,10 @@ html[data-theme="dark"] {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -845,6 +849,144 @@ html[data-theme="dark"] .back-top {
   display: none;
 }
 
+.preview-host {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 26px 32px 72px;
+  background: var(--panel);
+}
+
+.preview-host[hidden] {
+  display: none;
+}
+
+.preview-doc {
+  max-width: 920px;
+  margin: 0 auto;
+  isolation: isolate;
+  contain: paint;
+}
+
+.preview-doc.preview-pdf {
+  max-width: 1100px;
+}
+
+.preview-tools {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 4px 0 10px;
+  background: linear-gradient(var(--panel) 72%, transparent);
+}
+
+.preview-tool {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.preview-tool:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.preview-tool[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.preview-tool svg {
+  width: 18px;
+  height: 18px;
+}
+
+.preview-tool-text {
+  width: auto;
+  min-width: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+}
+
+.preview-tool-text span {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.preview-content.beautified {
+  max-width: 780px;
+  margin: 0 auto;
+  font-size: 16px;
+  line-height: 1.85;
+}
+
+.preview-note {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.preview-note.error {
+  color: var(--danger);
+}
+
+.source-view {
+  margin: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.json-key { color: var(--accent); }
+.json-string { color: var(--ok); }
+.json-number { color: #b26a00; }
+.json-boolean { color: #8a4fd3; }
+.json-null { color: var(--muted); }
+.json-punct { color: var(--muted); }
+
+html[data-theme="dark"] .json-number { color: #e0a458; }
+html[data-theme="dark"] .json-boolean { color: #c39bf5; }
+
+.pdf-page {
+  display: block;
+  margin: 0 auto 18px;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 3px 14px rgba(16, 24, 40, 0.12);
+}
+
+html[data-theme="dark"] .pdf-page {
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 720px) {
+  .preview-host {
+    padding: 20px 16px 64px;
+  }
+}
+
 .welcome {
   position: absolute;
   inset: 0;
@@ -1099,6 +1241,31 @@ html[data-theme="dark"] .back-top {
 .vditor-host .vditor-sv,
 .vditor-host .vditor-content {
   background: var(--panel);
+}
+
+/*
+ * Vditor 默认把表格设成 display:block + nowrap，列多时必须横向滚动。
+ * 阅读场景下让表格按正文宽度自适应，单元格内自动换行。
+ */
+.vditor-host .vditor-reset table {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+  word-break: normal;
+  overflow: visible;
+}
+
+.vditor-host .vditor-reset table th,
+.vditor-host .vditor-reset table td {
+  min-width: 72px;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.vditor-host .vditor-reset table th {
+  white-space: nowrap;
 }
 
 .vditor-host .vditor-outline {
