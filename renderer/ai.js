@@ -602,6 +602,7 @@
   }
 
   function updateContext() {
+    if (!els.context) return;
     const context = readBridgeContext();
     const documentText = String(context.document || '');
     const selection = String(context.selection || '');
@@ -916,9 +917,17 @@
 
   /* ------------------------------ 发送与流式 ------------------------------ */
 
+  function messageFilePath(message) {
+    if (!message) return null;
+    return (message.role === 'assistant' ? message.sourcePath : message.filePath) || null;
+  }
+
   function buildMessagesForRequest(currentUserMessage) {
     const messages = [];
+    const currentPath = messageFilePath(currentUserMessage);
     for (const message of state.messages) {
+      // 只发送同一份文档的对话历史，避免模型把上一份文件的总结带进新文件。
+      if (messageFilePath(message) !== currentPath) continue;
       if (message.role === 'assistant') {
         if (message.text.trim()) messages.push({ role: 'assistant', text: message.text });
         continue;
@@ -933,6 +942,15 @@
   }
 
   function appendUserMessage(message) {
+    const previous = state.messages[state.messages.length - 2] || null;
+    if (previous && messageFilePath(previous) !== messageFilePath(message)) {
+      const divider = document.createElement('div');
+      divider.className = 'ai-file-divider';
+      divider.textContent = `当前文件：${message.fileName || '未命名文档'}`;
+      divider.title = message.filePath || '';
+      els.messages.appendChild(divider);
+    }
+
     const wrapper = document.createElement('div');
     wrapper.className = 'ai-msg ai-msg-user';
 
@@ -1094,6 +1112,7 @@
     const context = readBridgeContext();
     const fullDocument = String(context.document || '');
     const documentText = fullDocument.slice(0, MAX_CONTEXT_CHARS);
+    const contextPath = context.filePath || null;
 
     const userMessage = {
       id: uid('msg'),
@@ -1101,7 +1120,9 @@
       text: `${typedText}${attachmentText}`.trim() || '请阅读附件。',
       displayText: typedText,
       images: state.pendingImages.map((image) => ({ ...image })),
-      docs: state.pendingDocs.map((doc) => ({ ...doc }))
+      docs: state.pendingDocs.map((doc) => ({ ...doc })),
+      filePath: contextPath,
+      fileName: context.fileName || ''
     };
     state.messages.push(userMessage);
     removeEmpty();
@@ -1117,7 +1138,7 @@
       aborted: false,
       streaming: true,
       usage: null,
-      sourcePath: context.filePath || null,
+      sourcePath: contextPath,
       sourceDocument: fullDocument,
       sourceRoot: context.rootPath || null
     };
@@ -1143,6 +1164,7 @@
         document: documentText,
         selection: String(context.selection || '').slice(0, 8000),
         fileName: context.fileName || '',
+        filePath: contextPath,
         rootPath: context.rootPath || null
       }
     };
@@ -1764,7 +1786,8 @@
     close,
     toggle,
     openSettings,
-    clear: clearChat
+    clear: clearChat,
+    refreshContext: updateContext
   };
 
   window.__readmdAISmoke = {

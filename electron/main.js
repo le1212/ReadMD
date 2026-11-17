@@ -1023,6 +1023,7 @@ function runSmokeTest() {
       }
 
       // AI 助手：mock provider -> 流式聊天 -> 修改建议 -> 应用 -> 图片
+      const aiCapturedRequests = [];
       const aiMock = await new Promise((resolve) => {
         const server = http.createServer((req, res) => {
           let body = '';
@@ -1030,10 +1031,18 @@ function runSmokeTest() {
           req.on('end', () => {
             let parsed = {};
             try { parsed = JSON.parse(body); } catch {}
+            aiCapturedRequests.push(parsed);
             const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
             const users = messages.filter((message) => message.role === 'user');
             const lastUser = users[users.length - 1];
-            const userText = JSON.stringify(lastUser?.content || '');
+            const rawUserContent = typeof lastUser?.content === 'string'
+              ? lastUser.content
+              : (Array.isArray(lastUser?.content)
+                ? lastUser.content.filter((part) => part && part.type === 'text').map((part) => part.text).join('\n')
+                : '');
+            const userText = JSON.stringify(rawUserContent.includes('用户请求：')
+              ? rawUserContent.split('用户请求：').pop()
+              : rawUserContent);
             const hasToolResult = messages.some((message) => message.role === 'tool');
             const hasTools = Array.isArray(parsed.tools) && parsed.tools.length > 0;
 
@@ -1209,6 +1218,59 @@ function runSmokeTest() {
         if (!aiChat || !String(aiChat.text || '').includes('你好，我是测试模型')) {
           failures.push('AI 聊天失败');
         }
+
+        // 打开文件夹外的文件后，AI 上下文必须切到这份文件，且不能带上上一份文件的对话历史。
+        const aiOutsideDir = path.join(os.tmpdir(), `readmd-ai-outside-${process.pid}`);
+        const aiOutsideFile = path.join(aiOutsideDir, '外部文档.md');
+        fs.mkdirSync(aiOutsideDir, { recursive: true });
+        fs.writeFileSync(aiOutsideFile, '# OUTSIDE_AI_MARKER\n\n这是文件夹外的当前文档。', 'utf8');
+        await addRoot(aiOutsideDir);
+        await addFile(aiOutsideFile);
+        await run(`window.__readmdSmoke.openPath(${JSON.stringify(aiOutsideFile)})`);
+        await wait(700);
+        const aiOutsideChat = await run(`window.__readmdAISmoke.chat('总结文件中的内容')`);
+        if (!aiOutsideChat || !String(aiOutsideChat.text || '').includes('你好，我是测试模型')) {
+          failures.push('切换文件后的 AI 聊天失败');
+        }
+        const outsideRequest = aiCapturedRequests[aiCapturedRequests.length - 1] || {};
+        const outsideMessages = Array.isArray(outsideRequest.messages) ? outsideRequest.messages : [];
+        const outsideSystem = JSON.stringify(outsideMessages.find((message) => message.role === 'system')?.content || '');
+        const outsideUser = [...outsideMessages].reverse().find((message) => message.role === 'user');
+        const outsideUserText = JSON.stringify(outsideUser?.content || '');
+        const outsideHistory = JSON.stringify(outsideMessages.filter((message) => message.role !== 'system'));
+        const outsideTools = JSON.stringify(outsideRequest.tools || []);
+        const aiContextSwitch = {
+          documentInUserMessage: outsideUserText.includes('OUTSIDE_AI_MARKER'),
+          systemHasOutsideNote: outsideSystem.includes('不在当前文件夹内'),
+          historyIsolated: !outsideHistory.includes('你好，我是测试模型'),
+          folderToolsHidden: !outsideTools.includes('search_files') && !outsideTools.includes('read_file'),
+          editToolsPresent: outsideTools.includes('propose_edit'),
+          divider: await run(`document.querySelectorAll('#ai-panel .ai-file-divider').length`)
+        };
+        console.log('[smoke] ai context switch', JSON.stringify(aiContextSwitch));
+        if (!aiContextSwitch.documentInUserMessage || !aiContextSwitch.systemHasOutsideNote) {
+          failures.push('切换文件后当前文档没有放进本轮用户消息或缺少位置说明');
+        }
+        if (!aiContextSwitch.historyIsolated) {
+          failures.push('切换文件后仍把上一份文件的对话历史发给模型');
+        }
+        if (!aiContextSwitch.folderToolsHidden || !aiContextSwitch.editToolsPresent) {
+          failures.push('普通总结请求不应开放文件夹搜索/读取工具，但仍需保留修改建议工具');
+        }
+        if (!aiContextSwitch.divider) failures.push('切换文件后 AI 面板缺少文件分隔提示');
+
+        // 用户明确要求搜索文件夹时，文件夹工具必须恢复可用。
+        await run(`window.__readmdAISmoke.chat('请搜索当前文件夹里关于 BUG 的内容')`);
+        const folderRequest = aiCapturedRequests[aiCapturedRequests.length - 1] || {};
+        const folderTools = JSON.stringify(folderRequest.tools || []);
+        const folderToolsVisible = folderTools.includes('search_files') && folderTools.includes('read_file');
+        console.log('[smoke] ai folder tools on demand', JSON.stringify({ folderToolsVisible }));
+        if (!folderToolsVisible) failures.push('明确要求搜索文件夹时没有开放文件夹工具');
+
+        fs.writeFileSync(path.join(screenshotDir, 'smoke-ai-context-switch.png'), (await capture()).toPNG());
+        await run('window.__readmdSmoke.closeActiveWithoutSaving()');
+        await wait(700);
+        fs.rmSync(aiOutsideDir, { recursive: true, force: true });
 
         const aiEdit = await run(`window.__readmdAISmoke.chat('请改写文档标题')`);
         const editProposal = aiEdit && Array.isArray(aiEdit.proposals) ? aiEdit.proposals[0] : null;

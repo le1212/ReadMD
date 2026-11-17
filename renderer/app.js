@@ -680,6 +680,7 @@ async function activateTab(ref, options = {}) {
   updateContentResizer();
   updateOutlineResizer();
   saveSession();
+  window.readmdAI?.refreshContext?.();
 
   if (!options.skipFocus && !isPreviewTab(tab)) {
     setTimeout(() => {
@@ -1492,6 +1493,7 @@ function showWelcome() {
   updateStatus();
   updateSaveButton();
   updateTitle();
+  window.readmdAI?.refreshContext?.();
 }
 
 function updateSaveButton() {

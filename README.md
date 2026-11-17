@@ -32,7 +32,7 @@
   <a href="#参与贡献">参与贡献</a>
 </p>
 
-> **项目状态**：`v0.5.0`，Windows 优先，功能可用但仍在快速迭代。欢迎提交 Issue 和 Pull Request。
+> **项目状态**：`v0.5.1`，Windows 优先，功能可用但仍在快速迭代。欢迎提交 Issue 和 Pull Request。
 >
 > **设计原则**：文件留在本地、格式保持开放、编辑器内核复用成熟项目、界面保持轻量。
 >
@@ -206,8 +206,8 @@ npm run dist         # 便携版（免安装，启动需解压）
 产物：
 
 ```text
-dist/ReadMD-0.5.0-setup.exe
-dist/ReadMD-0.5.0-portable.exe
+dist/ReadMD-0.5.1-setup.exe
+dist/ReadMD-0.5.1-portable.exe
 ```
 
 如果只想生成未打包的目录（便于调试）：

@@ -13,6 +13,23 @@
 - macOS / Linux 打包
 - 单元测试与 GitHub Actions CI
 
+## [0.5.1] - 2026-11-17
+
+### Fixed
+
+- 修复 AI 助手在“当前文件与打开的文件夹不在同一目录”时，可能总结文件夹里的其他文档而不是当前前台文档的问题
+  - 请求上下文补充当前文件路径；系统提示明确当前文件与文件夹的关系，当前文件不在文件夹内时禁止到文件夹里找替代文件
+  - 普通总结/改写请求不再开放“搜索文件夹、读取文件夹文件”工具，只有用户明确提到文件夹、目录或其他文件时才开放，避免模型自行读取别的文档
+  - 当前文档正文和选区改为放进本轮用户消息（不再只依赖 system prompt），兼容会丢弃或忽略 system 消息的接口；模型不会再回复“看不到文档内容”
+  - 同一次 AI 对话只发送同一份文档的历史消息，切换文件后旧文件的对话不再影响新文件的总结；面板中增加“当前文件：…”分隔提示
+  - 切换标签页时 AI 面板顶部的上下文信息立即刷新
+
+### Verification
+
+- `npm run smoke` 通过；新增 `ai context switch` 断言：`documentInUserMessage=true`、`systemHasOutsideNote=true`、`historyIsolated=true`、`folderToolsHidden=true`、`editToolsPresent=true`、`divider=1`；另有 `ai folder tools on demand` 验证明确要求搜索文件夹时工具恢复可用
+- 用 46,220 字的真实报告文件验证：请求中的用户消息长度为 46,326，包含文档标题 `02 管理员管理`；文件夹工具未开放，修改建议工具正常保留
+- 打包版冒烟测试通过（见本次发布的 `smoke-result.json`）
+
 ## [0.5.0] - 2026-11-16
 
 ### Added

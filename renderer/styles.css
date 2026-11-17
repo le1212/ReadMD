@@ -2098,6 +2098,25 @@ body.ai-resizing * {
   gap: 14px;
 }
 
+.ai-file-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--faint);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-file-divider::before,
+.ai-file-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+}
+
 .ai-empty {
   margin: auto 0;
   display: flex;
